@@ -104,7 +104,7 @@ struct LyricsView: View {
             if !collapsed { collapseButton(collapsed: false, visible: hovering).padding(8) }
         }
         .overlay(alignment: .bottomTrailing) {
-            if isDesktop && !collapsed { resizeGrip(visible: hovering) }
+            if !collapsed { resizeGrip(visible: hovering) }
         }
         .background(aura(palette))
         .background(GeometryReader { g in
@@ -116,7 +116,7 @@ struct LyricsView: View {
             DragGesture(minimumDistance: 3, coordinateSpace: .global)
                 .onChanged { _ in mover?.drag() }
                 .onEnded { _ in mover?.end() },
-            including: isDesktop ? .all : .subviews
+            including: .all
         )
         .simultaneousGesture(
             MagnifyGesture()
@@ -127,7 +127,7 @@ struct LyricsView: View {
                     settings.scale = Metrics.clamp(start * value.magnification)
                 }
                 .onEnded { _ in hover.resizeStart = nil; mover?.isInteracting = false },
-            including: isDesktop ? .all : .subviews
+            including: .all
         )
         .opacity(player.isPlaying ? 1 : 0.75)
         .animation(.easeInOut(duration: 0.5), value: player.isPlaying)

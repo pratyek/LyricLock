@@ -20,13 +20,20 @@ final class LyricOverlay {
     private(set) var isAboveLockScreen = false
     private var shown = false
     private var mouseTimer: Timer?
-    private static let originKey = "desktopTopLeft"
+    private var cursorHidden = false
+    /// Screensaver only: called when Space is pressed while it has focus.
+    var onSpace: (() -> Void)? {
+        didSet { (window as? KeyableWindow)?.onSpace = onSpace }
+    }
+    private var originKey: String { mode == .lockScreen ? "lockTopLeft" : "desktopTopLeft" }
 
     init<V: View>(mode: Mode, @ViewBuilder content: (WindowMover?) -> V) {
         self.mode = mode
         let screenFrame = NSScreen.screens.first?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let frame = mode == .screensaver ? screenFrame : NSRect(origin: .zero, size: Metrics.windowSize)
-        window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window = mode == .screensaver
+            ? KeyableWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            : NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
@@ -41,10 +48,19 @@ final class LyricOverlay {
         window.contentView = host
 
         switch mode {
-        case .lockScreen, .screensaver:
+        case .lockScreen:
             window.ignoresMouseEvents = true
             window.canBecomeVisibleWithoutLogin = true
             window.level = .screenSaver
+            window.alphaValue = 0
+            mover.window = window          // draggable on the lock screen too
+            mover.onEnd = { [weak self] in self?.saveOrigin() }
+        case .screensaver:
+            // LyricLock's own full-screen screensaver: a normal top-level window that takes
+            // focus while shown, so clicks and keys land on it (and do nothing) until Space.
+            window.ignoresMouseEvents = false
+            window.level = .screenSaver
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             window.alphaValue = 0
         case .desktop:
             // Just above the desktop icons, below every normal app window.
@@ -79,7 +95,7 @@ final class LyricOverlay {
     }
 
     func attachAboveLockScreen() {
-        guard mode != .desktop else { return }
+        guard mode == .lockScreen else { return }
         window.orderFrontRegardless()
         isAboveLockScreen = SkyLight.moveToLockScreenSpace(window)
     }
@@ -91,7 +107,7 @@ final class LyricOverlay {
             return
         }
         let size = window.frame.size
-        if mode == .desktop, let saved = UserDefaults.standard.string(forKey: Self.originKey) {
+        if mode != .screensaver, let saved = UserDefaults.standard.string(forKey: originKey) {
             let topLeft = NSPointFromString(saved)
             if NSScreen.screens.contains(where: { $0.frame.insetBy(dx: -80, dy: -80).contains(topLeft) }) {
                 window.setFrameOrigin(NSPoint(x: topLeft.x, y: topLeft.y - size.height))
@@ -109,7 +125,7 @@ final class LyricOverlay {
     // the lyrics lets clicks through, so resizing the lyrics never needs to resize the window.
 
     func resetDesktopPosition(lower: Bool) {
-        UserDefaults.standard.removeObject(forKey: Self.originKey)
+        UserDefaults.standard.removeObject(forKey: originKey)
         reposition(lower: lower)
     }
 
@@ -117,7 +133,32 @@ final class LyricOverlay {
         shown = visible
         if !visible { window.ignoresMouseEvents = true }
         switch mode {
-        case .lockScreen, .screensaver:
+        case .screensaver:
+            if visible {
+                if let screen = NSScreen.main ?? NSScreen.screens.first { window.setFrame(screen.frame, display: true) }
+                window.alphaValue = 0
+                NSApp.activate()
+                window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.6
+                    window.animator().alphaValue = 1
+                }
+                if !cursorHidden { NSCursor.hide(); cursorHidden = true }
+            } else {
+                if cursorHidden { NSCursor.unhide(); cursorHidden = false }
+                guard window.isVisible else { return }
+                NSAnimationContext.runAnimationGroup({ ctx in
+                    ctx.duration = 0.35
+                    window.animator().alphaValue = 0
+                }, completionHandler: { [weak self] in
+                    Task { @MainActor in
+                        guard let self, self.window.alphaValue == 0 else { return }
+                        self.window.orderOut(nil)
+                    }
+                })
+            }
+        case .lockScreen:
             // Never order out: that would pull the window out of the lock-screen space.
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.35
@@ -149,7 +190,7 @@ final class LyricOverlay {
 
     private func saveOrigin() {
         let f = window.frame
-        UserDefaults.standard.set(NSStringFromPoint(NSPoint(x: f.minX, y: f.maxY)), forKey: Self.originKey)
+        UserDefaults.standard.set(NSStringFromPoint(NSPoint(x: f.minX, y: f.maxY)), forKey: originKey)
     }
 }
 
@@ -264,5 +305,16 @@ final class BrowseState: ObservableObject {
         resetTask?.cancel()
         accumulated = 0
         if offset != 0 { offset = 0 }
+    }
+}
+
+/// Borderless window that can take keyboard focus (used by the screensaver). Every key is
+/// swallowed quietly except Space, which ends the screensaver.
+final class KeyableWindow: NSWindow {
+    var onSpace: (() -> Void)?
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 49 { onSpace?() }   // 49 = Space
     }
 }

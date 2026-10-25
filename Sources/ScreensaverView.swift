@@ -27,12 +27,19 @@ struct ScreensaverView: View {
                         center(track, width: min(1240, geo.size.width * 0.82))
                         Spacer(minLength: 20)
                         footer(track)
-                            .padding(.bottom, geo.size.height * 0.07)
+                            .padding(.bottom, geo.size.height * 0.06)
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
                     .transition(.opacity)
                 }
             }
+        }
+        .overlay(alignment: .bottom) {
+            Text("press space to exit")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .tracking(1.2)
+                .foregroundStyle(.white.opacity(0.28))
+                .padding(.bottom, 18)
         }
         .ignoresSafeArea()
         .environment(\.colorScheme, .dark)

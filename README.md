@@ -48,13 +48,13 @@ open /Applications/LyricLock.app
 Turn on **Show on Desktop** in the ♫ menu bar menu. The lyrics sit on your desktop, behind app windows. Extras only appear while you hover, so it stays clean.
 
 - **Drag** it anywhere; the spot is remembered.
-- **Resize**: pinch on the trackpad, drag the corner grip (bottom right), press ⌥⌘= / ⌥⌘−, or pick ♫ → Lyrics Size.
+- **Resize**: pinch on the trackpad, drag the corner grip (bottom right), or pick ♫ → Lyrics Size.
 - **Scroll** over the lyrics to look back (or ahead). It glides back to the live line after a few seconds.
 - **Click a line** to jump the song to it.
 - **Collapse** (hover → ˄ top right): shrinks to one line with the song and a play/pause button. Hover → ˅ to expand.
-- **Controls** (hover → chevron under the lyrics): repeat, previous, play/pause, next, save lyric image, open YouTube Music.
+- **Controls** (hover → chevron under the lyrics): repeat, previous, play/pause, next, save lyric image (to Pictures › LyricLock, also copied to the clipboard), open YouTube Music.
 
-The lock screen works the same way: collapse, play/pause and the controls are all there too.
+The lock screen works the same way: drag it anywhere (remembered separately from the desktop), resize, collapse, play/pause and the controls.
 
 ### Lyrics options (♫ menu)
 
@@ -65,40 +65,25 @@ The lock screen works the same way: collapse, play/pause and the controls are al
 - **Find Lyrics for This Song…**: search and pick the right lyrics if they're wrong or missing. Your pick is remembered.
 - **Font**: SF Pro, SF Rounded, New York, SF Mono, Avenir Next, Futura, Didot, Gill Sans, Optima, Baskerville, American Typewriter, Noteworthy.
 
-### Keyboard shortcuts (work from any app)
+### Lyrics screensaver
 
-All use **⌃⌥⌘** (Control + Option + Command), so they don't clash with shortcuts in other apps. Turn them off in ♫ → Keyboard Shortcuts → Enable Shortcuts.
+A full-screen scene: blurred album art, a large clock, big animated lyrics and the song at the bottom.
 
-| Keys | Action |
-|---|---|
-| ⌃⌥⌘L | Show / hide desktop lyrics |
-| ⌃⌥⌘P | Play / pause |
-| ⌃⌥⌘→ / ⌃⌥⌘← | Next / previous song |
-| ⌃⌥⌘= / ⌃⌥⌘− | Bigger / smaller lyrics |
-| ⌃⌥⌘S | Save the current lyric as an image (Pictures › LyricLock, also copied to clipboard) |
-| ⌃⌥⌘H | Hide everything right now |
+- **Start it:** press **⌃⌥⌘S** (Control + Option + Command + S) from any app, or ♫ → Start Lyrics Screensaver.
+- **End it:** press **Space**. Moving the mouse or pressing other keys does nothing, so it won't disappear by accident. (⌃⌥⌘S again also ends it.)
+- **Start it automatically:** ♫ → Start Screensaver Automatically → after 2, 5, 10 or 15 minutes idle, while music is playing.
 
-### Screensaver
+**Keep Screen On While Music Plays** (on by default) stops the display from going dark while music plays on the lock screen or the screensaver. It lets the screen sleep normally once you pause.
 
-When the macOS screen saver starts while music plays, LyricLock covers it with a full-screen scene: blurred album art, a large clock, big animated lyrics and the song at the bottom.
-
-To set it up (one time):
-
-1. **System Settings → Lock Screen → Start Screen Saver when inactive**: pick a time, e.g. 2 minutes.
-2. Same page: **Require password after screen saver begins** → *Immediately* if you want it to lock too.
-3. Optional, to start it instantly: **System Settings → Desktop & Dock → Hot Corners…** → pick a corner → *Start Screen Saver*. Or use ♫ → **Start Screensaver Now**.
-
-**Leaving the screensaver**: move the mouse or press any key, like with any screen saver. LyricLock's scene disappears immediately.
-
-**Keep Screen On While Music Plays** (on by default) stops the display from going dark while music plays on the lock screen or screensaver. It lets the screen sleep normally once you pause.
+⌃⌥⌘S is the only system-wide shortcut LyricLock uses. Space is only taken while the screensaver is showing.
 
 ### Menu options
 
-- **Show on Desktop** / **Reset Desktop Position**
+- **Show on Desktop** / **Reset Positions** (desktop and lock screen)
 - **Hide Desktop Lyrics When Paused**: fades out after 30 seconds of pause, returns on play.
 - **Lower on Lock Screen**: move it if it overlaps the clock or your user picture.
 - **Album Glow on Lock Screen**: a soft colour aura from the album art behind the lyrics.
-- **Lyrics Screensaver** / **Start Screensaver Now** / **Keep Screen On While Music Plays**
+- **Start Lyrics Screensaver** / **Start Screensaver Automatically** / **Keep Screen On While Music Plays**
 - **Lyrics Size**: Small, Medium, Large, Extra Large (or drag the corner grip).
 - **Song & Artist Size**: Small, Medium, Large.
 - **Font**: 12 built-in fonts (see Lyrics options above).
@@ -123,9 +108,9 @@ rm -rf /Applications/LyricLock.app && mv build/LyricLock.app /Applications/ && o
 | `Palette.swift` | Pulls the main colours out of the album art. |
 | `Translator.swift` | English translation via Apple's Translation framework. |
 | `LyricSearch.swift` | The Find Lyrics window. |
-| `HotKeys.swift` | System-wide shortcuts (no permissions needed). |
+| `HotKeys.swift` | The ⌃⌥⌘S shortcut and Space-to-exit (no permissions needed). |
 | `ShareCard.swift` | Renders the lyric image card. |
-| `ScreensaverView.swift` | The full-screen scene shown over the screen saver. |
+| `ScreensaverView.swift` | The full-screen lyrics screensaver. |
 | `Assets/` | App icon (`make_icon.py` regenerates it). |
 | `Overlay.swift` | Lock-screen window moved into a SkyLight window-server space above the lock screen (the technique WidgetScreen and Atoll use), plus the draggable desktop window. |
 
@@ -138,7 +123,7 @@ rm -rf /Applications/LyricLock.app && mv build/LyricLock.app /Applications/ && o
 
 ## Troubleshooting
 
-- **Anything ever feels stuck.** Press ⌃⌥⌘H to hide all LyricLock windows, or quit from the ♫ menu. In Terminal, `killall LyricLock` always works.
+- **Anything ever feels stuck.** Quit from the ♫ menu, or run `killall LyricLock` in Terminal.
 
 - **Menu says "media-control not installed".** Run step 2, then quit and reopen LyricLock.
 - **Menu says "Nothing playing" while music plays.** Run `media-control get` in Terminal. If that's empty too, the issue is the Now Playing feed, not LyricLock; try pausing and resuming in YouTube Music.

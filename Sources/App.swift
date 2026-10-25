@@ -105,14 +105,14 @@ final class Settings: ObservableObject {
     @Published var lockAura: Bool { didSet { defaults.set(lockAura, forKey: "lockAura") } }
     @Published var autoHideWhenPaused: Bool { didSet { defaults.set(autoHideWhenPaused, forKey: "autoHide") } }
     @Published var controlsExpanded: Bool { didSet { defaults.set(controlsExpanded, forKey: "controlsExpanded") } }
-    @Published var screensaver: Bool { didSet { defaults.set(screensaver, forKey: "screensaver") } }
+    /// Start the lyrics screensaver after this many idle minutes while music plays (0 = off).
+    @Published var saverIdleMinutes: Int { didSet { defaults.set(saverIdleMinutes, forKey: "saverIdleMinutes") } }
     @Published var keepAwake: Bool { didSet { defaults.set(keepAwake, forKey: "keepAwake") } }
     @Published var glow: Bool { didSet { defaults.set(glow, forKey: "glow") } }
     @Published var romanize: Bool { didSet { defaults.set(romanize, forKey: "romanize") } }
     @Published var translate: Bool { didSet { defaults.set(translate, forKey: "translate") } }
     @Published var menuBarLyric: Bool { didSet { defaults.set(menuBarLyric, forKey: "menuBarLyric") } }
     @Published var collapsed: Bool { didSet { defaults.set(collapsed, forKey: "collapsed") } }
-    @Published var shortcuts: Bool { didSet { defaults.set(shortcuts, forKey: "shortcuts") } }
 
     private init() {
         defaults.register(defaults: ["lockAura": true, "autoHide": true, "screensaver": true, "keepAwake": true,
@@ -127,14 +127,13 @@ final class Settings: ObservableObject {
         lockAura = defaults.bool(forKey: "lockAura")
         autoHideWhenPaused = defaults.bool(forKey: "autoHide")
         controlsExpanded = defaults.bool(forKey: "controlsExpanded")
-        screensaver = defaults.bool(forKey: "screensaver")
+        saverIdleMinutes = defaults.integer(forKey: "saverIdleMinutes")
         keepAwake = defaults.bool(forKey: "keepAwake")
         glow = defaults.bool(forKey: "glow")
         romanize = defaults.bool(forKey: "romanize")
         translate = defaults.bool(forKey: "translate")
         menuBarLyric = defaults.bool(forKey: "menuBarLyric")
         collapsed = defaults.bool(forKey: "collapsed")
-        shortcuts = defaults.bool(forKey: "shortcuts")
     }
 }
 
@@ -148,8 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var desktopOverlay: LyricOverlay!
     private var screensaverOverlay: LyricOverlay!
     private var isScreensaver = false
-    private var saverStartedAt = Date.distantPast
-    private var saverWatch: Timer?
+    private var idleTimer: Timer?
     private var displayAssertion: IOPMAssertionID = 0
     private var menuBarTimer: Timer?
     private var searchWindow: NSWindow?
@@ -182,17 +180,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         screensaverOverlay = LyricOverlay(mode: .screensaver) { _ in
             ScreensaverView(player: self.player, lyrics: self.lyrics)
         }
-        screensaverOverlay.attachAboveLockScreen()
+        screensaverOverlay.onSpace = { [weak self] in self?.endScreensaver() }
 
         let dnc = DistributedNotificationCenter.default()
         dnc.addObserver(self, selector: #selector(screenLocked),
                         name: Notification.Name("com.apple.screenIsLocked"), object: nil)
         dnc.addObserver(self, selector: #selector(screenUnlocked),
                         name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
-        dnc.addObserver(self, selector: #selector(screensaverStarted),
-                        name: Notification.Name("com.apple.screensaver.didstart"), object: nil)
-        dnc.addObserver(self, selector: #selector(screensaverStopped),
-                        name: Notification.Name("com.apple.screensaver.didstop"), object: nil)
 
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification,
@@ -215,6 +209,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = lyrics // start observing
         player.start()
         registerShortcuts()
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkIdle() }
+        }
         menuBarTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateMenuBarLyric() }
         }
@@ -222,40 +219,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Lock state
 
-    @objc private func screenLocked() { isLocked = true; updateVisibility() }
+    @objc private func screenLocked() { isLocked = true; endScreensaver(); updateVisibility() }
     @objc private func screenUnlocked() { isLocked = false; updateVisibility() }
-    @objc private func screensaverStarted() {
-        isScreensaver = true
-        saverStartedAt = Date()
-        updateVisibility()
-        // Safety net: hide the scene the moment you touch the mouse or keyboard, or if the
-        // screen saver goes away without telling us. You can never get stuck behind it.
-        saverWatch?.invalidate()
-        saverWatch = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkScreensaver() }
-        }
-    }
-    @objc private func screensaverStopped() { endScreensaver() }
+    // MARK: Screensaver (LyricLock's own, so only Space ends it)
 
-    private func checkScreensaver() {
-        guard isScreensaver else { saverWatch?.invalidate(); return }
-        let age = Date().timeIntervalSince(saverStartedAt)
-        let types: [CGEventType] = [.mouseMoved, .keyDown, .leftMouseDown, .rightMouseDown,
-                                    .scrollWheel, .flagsChanged, .otherMouseDown]
-        let idle = types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 999
-        let engineRunning = NSWorkspace.shared.runningApplications.contains { app in
-            app.bundleIdentifier == "com.apple.ScreenSaver.Engine" || app.localizedName == "ScreenSaverEngine"
+    /// ⌃⌥⌘S starts it. Space ends it (⌃⌥⌘S again also works, as a backup).
+    /// Moving the mouse or pressing other keys does nothing while it's showing.
+    private func beginScreensaver() {
+        guard !isScreensaver else { return }
+        isScreensaver = true
+        updateVisibility()
+        // Space is only grabbed while the screensaver is up, and released the moment it ends.
+        HotKeys.shared.register(keyCode: kVK_Space, modifiers: 0, tag: "space") { [weak self] in
+            self?.endScreensaver()
         }
-        if (age > 1.5 && idle < 0.5) || (age > 3 && !engineRunning) { endScreensaver() }
     }
 
     private func endScreensaver() {
-        saverWatch?.invalidate()
-        saverWatch = nil
+        HotKeys.shared.unregister(tag: "space")
         guard isScreensaver else { return }
         isScreensaver = false
         updateVisibility()
     }
+
+    /// Starts the screensaver by itself after a stretch of no mouse/keyboard input, if enabled.
+    private func checkIdle() {
+        guard settings.saverIdleMinutes > 0, !isScreensaver, !isLocked, player.isPlaying else { return }
+        let types: [CGEventType] = [.mouseMoved, .keyDown, .leftMouseDown, .scrollWheel, .flagsChanged]
+        let idle = types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
+        if idle >= Double(settings.saverIdleMinutes * 60) { beginScreensaver() }
+    }
+
     @objc private func screensChanged() {
         screensaverOverlay.reposition(lower: false)
         lockOverlay.reposition(lower: settings.lowerPosition)
@@ -263,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateVisibility() {
-        let saver = hasTrack && isScreensaver && settings.screensaver
+        let saver = isScreensaver
         screensaverOverlay.setVisible(saver)
         lockOverlay.setVisible(hasTrack && isLocked && !saver)
         let hiddenForPause = settings.autoHideWhenPaused && pausedLong
@@ -322,12 +316,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         item(menu, "Show on Desktop", #selector(toggleDesktop), on: settings.showOnDesktop)
-        item(menu, "Reset Desktop Position", #selector(resetDesktop))
+        item(menu, "Reset Positions", #selector(resetDesktop))
         item(menu, "Hide Desktop Lyrics When Paused", #selector(toggleAutoHide), on: settings.autoHideWhenPaused)
         item(menu, "Lower on Lock Screen", #selector(togglePosition), on: settings.lowerPosition)
         item(menu, "Album Glow on Lock Screen", #selector(toggleAura), on: settings.lockAura)
-        item(menu, "Lyrics Screensaver", #selector(toggleScreensaver), on: settings.screensaver)
-        item(menu, "Start Screensaver Now", #selector(startScreensaver))
+        item(menu, "Start Lyrics Screensaver   ⌃⌥⌘S", #selector(startScreensaverFromMenu))
+        let idleMenu = NSMenu()
+        for minutes in [0, 2, 5, 10, 15] {
+            let i = NSMenuItem(title: minutes == 0 ? "Never" : "After \(minutes) minutes idle",
+                               action: #selector(pickIdle(_:)), keyEquivalent: "")
+            i.target = self
+            i.tag = minutes
+            i.state = settings.saverIdleMinutes == minutes ? .on : .off
+            idleMenu.addItem(i)
+        }
+        let idleItem = NSMenuItem(title: "Start Screensaver Automatically", action: nil, keyEquivalent: "")
+        idleItem.submenu = idleMenu
+        menu.addItem(idleItem)
         item(menu, "Keep Screen On While Music Plays", #selector(toggleKeepAwake), on: settings.keepAwake)
         menu.addItem(.separator())
 
@@ -386,24 +391,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(menu, "Reset Timing", #selector(resetTiming))
         menu.addItem(.separator())
 
-        let keys = NSMenu()
-        let on = NSMenuItem(title: "Enable Shortcuts", action: #selector(toggleShortcuts), keyEquivalent: "")
-        on.target = self
-        on.state = settings.shortcuts ? .on : .off
-        keys.addItem(on)
-        keys.addItem(.separator())
-        for (label, combo) in [("Show / Hide Desktop Lyrics", "⌃⌥⌘L"), ("Play / Pause", "⌃⌥⌘P"),
-                               ("Next Song", "⌃⌥⌘→"), ("Previous Song", "⌃⌥⌘←"),
-                               ("Bigger Lyrics", "⌃⌥⌘="), ("Smaller Lyrics", "⌃⌥⌘−"),
-                               ("Save Lyric Image", "⌃⌥⌘S"), ("Hide Everything", "⌃⌥⌘H")] {
-            let i = NSMenuItem(title: "\(combo)   \(label)", action: nil, keyEquivalent: "")
-            i.isEnabled = false
-            keys.addItem(i)
-        }
-        let keysItem = NSMenuItem(title: "Keyboard Shortcuts", action: nil, keyEquivalent: "")
-        keysItem.submenu = keys
-        menu.addItem(keysItem)
-
         item(menu, "Launch at Login", #selector(toggleLogin),
              on: SMAppService.mainApp.status == .enabled)
         item(menu, "Quit LyricLock", #selector(quit))
@@ -427,11 +414,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.lowerPosition.toggle()
         lockOverlay.reposition(lower: settings.lowerPosition)
     }
-    @objc private func toggleScreensaver() { settings.screensaver.toggle(); updateVisibility() }
     @objc private func toggleKeepAwake() { settings.keepAwake.toggle(); updateDisplayAssertion() }
-    @objc private func startScreensaver() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app"))
-    }
+    @objc private func startScreensaverFromMenu() { beginScreensaver() }
+    @objc private func pickIdle(_ sender: NSMenuItem) { settings.saverIdleMinutes = sender.tag }
     @objc private func toggleGlow() { settings.glow.toggle() }
     @objc private func toggleRomanize() { settings.romanize.toggle() }
     @objc private func toggleTranslate() {
@@ -473,35 +458,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if button.title != title { button.title = title }
     }
 
-    @objc private func toggleShortcuts() {
-        settings.shortcuts.toggle()
-        registerShortcuts()
-    }
-
-    /// Emergency: hide every LyricLock window right now.
-    private func hideEverything() {
-        endScreensaver()
-        settings.showOnDesktop = false
-        updateVisibility()
-    }
-
+    /// The only global shortcut: ⌃⌥⌘S starts the lyrics screensaver (or ends it).
     private func registerShortcuts() {
-        let keys = HotKeys.shared
-        keys.unregisterAll()
-        guard settings.shortcuts else { return }
-        keys.register(keyCode: kVK_ANSI_H) { [weak self] in self?.hideEverything() }
-        keys.register(keyCode: kVK_ANSI_L) { [weak self] in self?.toggleDesktop() }
-        keys.register(keyCode: kVK_ANSI_P) { [weak self] in self?.player.togglePlayPause() }
-        keys.register(keyCode: kVK_RightArrow) { [weak self] in self?.player.next() }
-        keys.register(keyCode: kVK_LeftArrow) { [weak self] in self?.player.previous() }
-        keys.register(keyCode: kVK_ANSI_Equal) { [weak self] in self?.nudgeSize(0.1) }
-        keys.register(keyCode: kVK_ANSI_Minus) { [weak self] in self?.nudgeSize(-0.1) }
-        keys.register(keyCode: kVK_ANSI_S) { [weak self] in self?.saveLyricImage() }
-    }
-
-    private func nudgeSize(_ delta: Double) {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            settings.scale = Metrics.clamp(settings.scale + delta)
+        HotKeys.shared.register(keyCode: kVK_ANSI_S, tag: "saver") { [weak self] in
+            guard let self else { return }
+            if self.isScreensaver { self.endScreensaver() } else { self.beginScreensaver() }
         }
     }
 
@@ -526,7 +487,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func pickFont(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let font = LyricFont(rawValue: raw) { settings.font = font }
     }
-    @objc private func resetDesktop() { desktopOverlay.resetDesktopPosition(lower: false) }
+    @objc private func resetDesktop() {
+        desktopOverlay.resetDesktopPosition(lower: false)
+        lockOverlay.resetDesktopPosition(lower: settings.lowerPosition)
+    }
     @objc private func earlier() { settings.offset += 0.25 }
     @objc private func later() { settings.offset -= 0.25 }
     @objc private func resetTiming() { settings.offset = 0 }
