@@ -79,7 +79,8 @@ struct LyricsView: View {
                                    onTap: { line in
                                        browse.reset()
                                        player.seek(to: max(0, line.time - 0.05))
-                                   })
+                                   },
+                                   onLive: { browse.setRange(live: $0, count: $1) })
                     default:
                         BreathingDots(time: Date().timeIntervalSinceReferenceDate, color: palette.primary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -393,6 +394,8 @@ struct LyricStack: View {
     var showTranslation = false
     var browseOffset = 0
     var onTap: ((LyricLine) -> Void)? = nil
+    /// Reports (live line, line count) so scrolling can stop at the ends.
+    var onLive: ((Int, Int) -> Void)? = nil
 
     private static let reach = 2
     /// Switch lines a hair early so it feels in sync rather than late.
@@ -444,6 +447,7 @@ struct LyricStack: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: focus)
         .animation(.easeInOut(duration: 0.35), value: intro)
+        .onChange(of: live, initial: true) { _, value in onLive?(value, lines.count) }
         .mask(
             LinearGradient(stops: [
                 .init(color: .clear, location: 0),

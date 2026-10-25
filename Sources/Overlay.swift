@@ -20,6 +20,7 @@ final class LyricOverlay {
     private(set) var isAboveLockScreen = false
     private var shown = false
     private var mouseTimer: Timer?
+    private var scrollMonitor: Any?
     private var cursorTimer: Timer?
     /// Screensaver only: called when Space is pressed while it has focus.
     var onSpace: (() -> Void)? {
@@ -41,8 +42,6 @@ final class LyricOverlay {
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
         let host = OverlayHostingView(rootView: content(mover))
-        let browse = mover.browse
-        host.onScroll = { event in browse.scroll(event) }
         host.frame = NSRect(origin: .zero, size: frame.size)
         host.autoresizingMask = [.width, .height]
         window.contentView = host
@@ -70,7 +69,20 @@ final class LyricOverlay {
             mover.onEnd = { [weak self] in self?.saveOrigin() }
         }
 
-        // The screensaver never takes the mouse: any movement there should wake the Mac.
+        // Scrolling over this window browses the lyrics. Caught at the app level, so it works
+        // no matter which part of the view is under the pointer.
+        let browse = mover.browse
+        let target = window
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            let handled = MainActor.assumeIsolated { () -> Bool in
+                guard event.window === target else { return false }
+                browse.scroll(event)
+                return true
+            }
+            return handled ? nil : event
+        }
+
+        // Desktop and lock-screen windows only take the mouse over the lyrics card.
         if mode != .screensaver {
             mouseTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.updateMousePassThrough() }
@@ -241,9 +253,7 @@ final class WindowMover {
 
 /// Clicks work on the first try even though LyricLock is a background app.
 final class OverlayHostingView<Content: View>: NSHostingView<Content> {
-    var onScroll: ((NSEvent) -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func scrollWheel(with event: NSEvent) { onScroll?(event) }
     override var mouseDownCanMoveWindow: Bool { false }
 }
 
@@ -288,6 +298,17 @@ enum SkyLight {
 final class BrowseState: ObservableObject {
     @Published private(set) var offset = 0
     private var accumulated: CGFloat = 0
+    /// How far you can scroll from the live line (set by the lyrics view).
+    private var minOffset = Int.min
+    private var maxOffset = Int.max
+
+    func setRange(live: Int, count: Int) {
+        let l = max(live, 0)
+        minOffset = -l
+        maxOffset = max(count - 1 - l, 0)
+        let clamped = min(max(offset, minOffset), maxOffset)
+        if clamped != offset { offset = clamped }
+    }
     private var resetTask: Task<Void, Never>?
 
     func scroll(_ event: NSEvent) {
@@ -295,8 +316,13 @@ final class BrowseState: ObservableObject {
         accumulated += dy
         let step: CGFloat = 34
         var changed = false
-        while accumulated >= step { accumulated -= step; offset -= 1; changed = true }
-        while accumulated <= -step { accumulated += step; offset += 1; changed = true }
+        var next = offset
+        while accumulated >= step { accumulated -= step; next -= 1; changed = true }
+        while accumulated <= -step { accumulated += step; next += 1; changed = true }
+        // Stop at the first/last line instead of piling up invisible scroll.
+        let clamped = min(max(next, minOffset), maxOffset)
+        if clamped != next { accumulated = 0 }
+        if clamped != offset { offset = clamped }
         guard changed || offset != 0 else { return }
         resetTask?.cancel()
         resetTask = Task { [weak self] in

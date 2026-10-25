@@ -31,6 +31,13 @@ final class NowPlaying: ObservableObject {
     private var playerBundleID: String?
     private var lastManualSkip = Date.distantPast
     private var lastLoopSeek = Date.distantPast
+    // Self-checking seek: media-control's seek unit isn't documented, so LyricLock tries
+    // seconds, checks the player actually moved, falls back to microseconds, and remembers
+    // whichever worked.
+    private var seekTarget: Double?
+    private var seekSentAt = Date.distantPast
+    private var seekTriedOther = false
+    private var seekInMicros = UserDefaults.standard.bool(forKey: "seekInMicros")
     private let binary: String?
 
     init() {
@@ -100,15 +107,22 @@ final class NowPlaying: ObservableObject {
         baseElapsed = t
         baseDate = Date()
         lastLoopSeek = Date()
-        send(["seek", String(format: "%.2f", t)], fallback: ["seek", String(Int(t))])
+        seekTarget = t
+        seekTriedOther = false
+        sendSeek(t, micros: seekInMicros)
     }
 
-    private func seekToStart() {
-        lastLoopSeek = Date()
-        baseElapsed = 0
-        baseDate = Date()
-        send(["seek", "0"], fallback: ["seek", "0"])
+    private func sendSeek(_ t: Double, micros: Bool) {
+        seekSentAt = Date()
+        if micros {
+            let v = String(Int(t * 1_000_000))
+            send(["seek", v], fallback: ["seek", v])
+        } else {
+            send(["seek", String(format: "%.2f", t)], fallback: ["seek", String(Int(t.rounded()))])
+        }
     }
+
+    private func seekToStart() { seek(to: 0) }
 
     private func send(_ args: [String], fallback: [String]) {
         guard let binary else { return }
@@ -197,8 +211,34 @@ final class NowPlaying: ObservableObject {
 
         // Snap on big changes (new song, play/pause, seeking); otherwise ease small drift
         // in gradually so the word animation never visibly jumps.
+        // A seek is in flight: check it landed; ignore stale readings for a moment so the
+        // lyrics don't bounce back; retry with the other unit if the player didn't move.
+        var ignorePosition = false
+        if let target = seekTarget, !changed {
+            let expected = target + now.timeIntervalSince(seekSentAt) * (playing ? newRate : 0)
+            let age = now.timeIntervalSince(seekSentAt)
+            if abs(elapsed - expected) < 2.5 {
+                seekTarget = nil
+                UserDefaults.standard.set(seekInMicros, forKey: "seekInMicros")
+            } else if age < 1.5 {
+                ignorePosition = true
+            } else if !seekTriedOther {
+                seekTriedOther = true
+                seekInMicros.toggle()
+                sendSeek(expected, micros: seekInMicros)
+                ignorePosition = true
+            } else {
+                seekTarget = nil   // give up; follow the player again
+                seekInMicros.toggle()
+            }
+        } else if changed {
+            seekTarget = nil
+        }
+
         let drift = elapsed - previousPosition
-        if changed || playing != isPlaying || abs(drift) > 1.5 {
+        if ignorePosition {
+            // keep the optimistic position
+        } else if changed || playing != isPlaying || abs(drift) > 1.5 {
             baseElapsed = elapsed
             baseDate = now
         } else if abs(drift) > 0.12 {

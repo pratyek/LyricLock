@@ -107,7 +107,8 @@ struct ScreensaverView: View {
                            onTap: { line in
                                browse.reset()
                                player.seek(to: max(0, line.time - 0.05))
-                           })
+                           },
+                           onLive: { browse.setRange(live: $0, count: $1) })
             }
             .frame(width: width, height: Metrics.screen.lyricsHeight)
         default:
