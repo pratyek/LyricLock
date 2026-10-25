@@ -108,40 +108,51 @@ enum LyricsService {
     private static let base = "https://lrclib.net/api"
 
     static func fetch(title: String, artist: String, album: String, duration: Double) async -> Lyrics? {
-        let t = cleanTitle(title)
+        let original = baseTitle(title)          // keeps "(From ...)" in case LRCLIB uses it
+        let t = cleanTitle(title)                // "Tiger Muthuvel Pandian"
         let a = cleanArtist(artist)
+        let lead = primaryArtist(artist)         // "Anirudh Ravichander"
+        let dur = String(Int(duration.rounded()))
 
-        // 1. Exact match (needs album + duration)
-        if !album.isEmpty, duration > 0,
-           let record: LrclibRecord = await request("get", [
-                "track_name": t, "artist_name": a,
-                "album_name": album, "duration": String(Int(duration.rounded()))
-           ]),
-           let lyrics = record.parsed, lyrics.synced {
-            return lyrics
+        // 1. Exact matches (need album + duration)
+        if !album.isEmpty, duration > 0 {
+            for (tt, aa) in [(original, a), (t, a), (t, lead)] {
+                if let record: LrclibRecord = await request("get", [
+                        "track_name": tt, "artist_name": aa, "album_name": album, "duration": dur]),
+                   let lyrics = record.parsed, lyrics.synced {
+                    return lyrics
+                }
+            }
         }
-        // 2. Search by title + artist
-        if let list: [LrclibRecord] = await request("search", ["track_name": t, "artist_name": a]),
-           let best = pick(list, duration) {
+        // 2. Title + main artist
+        if let list: [LrclibRecord] = await request("search", ["track_name": t, "artist_name": lead]),
+           let best = pick(list, duration, strict: false) {
             return best
         }
-        // 3. Free-text search
-        if let list: [LrclibRecord] = await request("search", ["q": "\(t) \(a)"]),
-           let best = pick(list, duration) {
+        // 3. Title only, but the length must match so we don't grab a different song
+        if duration > 0,
+           let list: [LrclibRecord] = await request("search", ["track_name": t]),
+           let best = pick(list, duration, strict: true) {
+            return best
+        }
+        // 4. Free text
+        if let list: [LrclibRecord] = await request("search", ["q": "\(t) \(lead)"]),
+           let best = pick(list, duration, strict: false) {
             return best
         }
         return nil
     }
 
-    private static func pick(_ list: [LrclibRecord], _ duration: Double) -> Lyrics? {
+    private static func pick(_ list: [LrclibRecord], _ duration: Double, strict: Bool) -> Lyrics? {
         func close(_ r: LrclibRecord) -> Bool {
-            guard duration > 0, let d = r.duration else { return true }
+            guard duration > 0, let d = r.duration else { return !strict }
             return abs(d - duration) < 4
         }
-        let synced = list.filter { ($0.syncedLyrics ?? "").isEmpty == false }
+        let candidates = strict ? list.filter(close) : list
+        let synced = candidates.filter { ($0.syncedLyrics ?? "").isEmpty == false }
         if let r = synced.first(where: close), let l = r.parsed { return l }
         if let r = synced.first, let l = r.parsed { return l }
-        if let r = list.first(where: { $0.parsed != nil }) { return r.parsed }
+        if let r = candidates.first(where: { $0.parsed != nil }) { return r.parsed }
         return nil
     }
 
@@ -160,8 +171,8 @@ enum LyricsService {
         }
     }
 
-    /// Strips YouTube-isms like "(Official Video)" or "[Lyrics]".
-    static func cleanTitle(_ s: String) -> String {
+    /// Removes only video noise like "(Official Video)" or "[Lyrics]".
+    static func baseTitle(_ s: String) -> String {
         var out = s
         let noise = #"\s*[\(\[][^\)\]]*(official|video|audio|lyric|visuali[sz]er|remaster|hd|4k|m/?v)[^\)\]]*[\)\]]"#
         out = out.replacingOccurrences(of: noise, with: "", options: [.regularExpression, .caseInsensitive])
@@ -169,10 +180,37 @@ enum LyricsService {
         return out.trimmingCharacters(in: .whitespaces)
     }
 
+    /// Also strips film credits and features: `Song (From "Film")` -> `Song`.
+    static func cleanTitle(_ s: String) -> String {
+        var out = baseTitle(s)
+        let patterns = [
+            #"\s*[\(\[]\s*(from|feat\.?|ft\.?|featuring)\b[^\)\]]*[\)\]]"#,
+            #"\s+-\s+(from|feat\.?|ft\.?)\b.*$"#,
+            #"\s+(feat\.?|ft\.?|featuring)\s+.*$"#,
+        ]
+        for p in patterns {
+            out = out.replacingOccurrences(of: p, with: "", options: [.regularExpression, .caseInsensitive])
+        }
+        out = out.trimmingCharacters(in: .whitespaces)
+        return out.isEmpty ? baseTitle(s) : out
+    }
+
     static func cleanArtist(_ s: String) -> String {
         s.replacingOccurrences(of: " - Topic", with: "")
          .replacingOccurrences(of: "VEVO", with: "")
          .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// First credited artist: "Anirudh Ravichander, M.S Krsna & Super Subu" -> "Anirudh Ravichander".
+    static func primaryArtist(_ s: String) -> String {
+        let cleaned = cleanArtist(s)
+        let parts = cleaned.components(separatedBy: CharacterSet(charactersIn: ",&"))
+        var first = parts.first ?? cleaned
+        for sep in [" x ", " X ", " feat", " ft.", " and "] {
+            if let r = first.range(of: sep) { first = String(first[..<r.lowerBound]) }
+        }
+        first = first.trimmingCharacters(in: .whitespaces)
+        return first.isEmpty ? cleaned : first
     }
 }
 

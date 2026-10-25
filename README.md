@@ -41,23 +41,44 @@ open /Applications/LyricLock.app
 
 1. Play a song in YouTube Music.
 2. Lock your Mac: **Ctrl + Cmd + Q** (or Apple menu → Lock Screen).
-3. The lyrics card appears on the lock screen and hides again when you unlock.
+3. The lyrics appear on the lock screen in a translucent glass card tinted with the album's colours, and hide again when you unlock.
 
-From the ♫ menu bar icon you can:
+### Desktop widget
 
-- **Show on Desktop**: lyrics float on your desktop, behind app windows, like a desktop widget. Drag them anywhere; "Reset Desktop Position" puts them back.
+Turn on **Show on Desktop** in the ♫ menu bar menu. The card sits on your desktop, behind app windows.
+
+- **Drag** it anywhere; the spot is remembered.
+- Click the **little chevron** under the lyrics to show or hide controls: repeat, previous, play/pause, next, and a queue button.
+- **Repeat** loops the current song (LyricLock handles this itself).
+- **Queue** brings the YouTube Music window to the front. YouTube Music doesn't share its queue with macOS, so it can't be shown inside the widget.
+
+### Menu options
+
+- **Show on Desktop** / **Reset Desktop Position**
+- **Hide Desktop Lyrics When Paused**: fades out after 30 seconds of pause, returns on play.
 - **Lower on Lock Screen**: move it if it overlaps the clock or your user picture.
-- **Show Lyrics Earlier / Later**: nudge the timing in 0.25s steps if lyrics feel off.
-- **Launch at Login**: start automatically.
+- **Album Glow on Lock Screen**: a soft colour aura from the album art behind the card.
+- **Size**: Small, Medium, Large. **Font**: Default, Rounded, Serif.
+- **Show Lyrics Earlier / Later**: nudge timing in 0.25s steps.
+- **Launch at Login**
+
+## Updating
+
+```bash
+cd path/to/LyricLock
+git pull && ./build.sh
+rm -rf /Applications/LyricLock.app && mv build/LyricLock.app /Applications/ && open /Applications/LyricLock.app
+```
 
 ## How it works
 
 | Piece | What it does |
 |---|---|
 | `NowPlaying.swift` | Polls `media-control get` once a second for title, artist and playback position, and extrapolates smoothly between polls. Works with any player that shows in the system media controls, not just YouTube Music. |
-| `Lyrics.swift` | Fetches time-synced lyrics from [LRCLIB](https://lrclib.net) (free, no account) and parses the LRC format. Cleans titles like "(Official Video)". |
-| `LyricsView.swift` | SwiftUI glass card: current line glows and fills left-to-right as it's sung, other lines blur and fade, and the list springs to each new line. |
-| `Overlay.swift` | Click-through window moved into a SkyLight window-server space above the lock screen, the same technique WidgetScreen and Atoll use. |
+| `Lyrics.swift` | Fetches time-synced lyrics from [LRCLIB](https://lrclib.net) (free, no account) and parses the LRC format. Strips "(Official Video)", "(From \"Film\")" and extra artists so more songs match. |
+| `LyricsView.swift` | Glass card: words light up one by one in the song's colour as they're sung, other lines blur and fade, breathing dots during instrumentals, collapsible controls. |
+| `Palette.swift` | Pulls the main colours out of the album art. |
+| `Overlay.swift` | Lock-screen window moved into a SkyLight window-server space above the lock screen (the technique WidgetScreen and Atoll use), plus the draggable desktop window. |
 
 ## Good to know
 

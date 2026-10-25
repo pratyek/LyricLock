@@ -1,33 +1,34 @@
 import AppKit
 import SwiftUI
 
-/// Two kinds of transparent lyric windows share this class:
+/// Two kinds of lyric windows share this class:
 /// - `.lockScreen`: click-through, moved into a SkyLight (WindowServer) space above the
 ///   lock screen. Only made visible while the Mac is locked.
 /// - `.desktop`: sits on the desktop layer, behind every app window, like a desktop widget.
-///   Drag it anywhere; the position is remembered.
+///   Drag it anywhere; buttons work; the position is remembered.
 @MainActor
 final class LyricOverlay {
     enum Mode { case lockScreen, desktop }
 
     private let window: NSWindow
     private let mode: Mode
+    private let mover = WindowMover()
     private(set) var isAboveLockScreen = false
-    private static let size = NSSize(width: 880, height: 340)
-    private static let originKey = "desktopOrigin"
+    private static let originKey = "desktopTopLeft"
 
-    init<V: View>(rootView: V, mode: Mode) {
+    init<V: View>(mode: Mode, size: LyricSize, @ViewBuilder content: (WindowMover?) -> V) {
         self.mode = mode
-        window = NSWindow(contentRect: NSRect(origin: .zero, size: Self.size),
-                          styleMask: [.borderless], backing: .buffered, defer: false)
+        let frame = NSRect(origin: .zero, size: size.windowSize)
+        window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
-        let host = DraggableHostingView(rootView: rootView)
-        host.frame = NSRect(origin: .zero, size: Self.size)
+        let host = OverlayHostingView(rootView: content(mode == .desktop ? mover : nil))
+        host.frame = frame
+        host.autoresizingMask = [.width, .height]
         window.contentView = host
 
         switch mode {
@@ -39,11 +40,8 @@ final class LyricOverlay {
             // Just above the desktop icons, below every normal app window.
             window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
             window.ignoresMouseEvents = false
-            window.isMovableByWindowBackground = true
-            NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification,
-                                                   object: window, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.saveOrigin() }
-            }
+            mover.window = window
+            mover.onEnd = { [weak self] in self?.saveOrigin() }
         }
     }
 
@@ -55,19 +53,28 @@ final class LyricOverlay {
 
     func reposition(lower: Bool) {
         guard let screen = NSScreen.screens.first else { return }
+        let size = window.frame.size
         if mode == .desktop, let saved = UserDefaults.standard.string(forKey: Self.originKey) {
-            let p = NSPointFromString(saved)
-            if NSScreen.screens.contains(where: { $0.frame.insetBy(dx: -50, dy: -50).contains(p) }) {
-                window.setFrameOrigin(p)
+            let topLeft = NSPointFromString(saved)
+            if NSScreen.screens.contains(where: { $0.frame.insetBy(dx: -80, dy: -80).contains(topLeft) }) {
+                window.setFrameOrigin(NSPoint(x: topLeft.x, y: topLeft.y - size.height))
                 return
             }
         }
         let f = screen.frame
-        let size = window.frame.size
-        let y = lower
-            ? f.minY + f.height * 0.14
-            : f.midY - size.height / 2 - f.height * 0.04
+        // The card hangs from the top of the window, so aim the window's upper part at the target.
+        let targetCenterY = lower ? f.minY + f.height * 0.3 : f.midY - f.height * 0.02
+        let y = targetCenterY - size.height * 0.62
         window.setFrameOrigin(NSPoint(x: f.midX - size.width / 2, y: y))
+    }
+
+    /// Change window size for a new lyric size, keeping the top edge in place.
+    func resize(to size: LyricSize, lower: Bool) {
+        let old = window.frame
+        let newSize = size.windowSize
+        let origin = NSPoint(x: old.midX - newSize.width / 2, y: old.maxY - newSize.height)
+        window.setFrame(NSRect(origin: origin, size: newSize), display: true)
+        if mode == .desktop { saveOrigin() } else { reposition(lower: lower) }
     }
 
     func resetDesktopPosition(lower: Bool) {
@@ -85,26 +92,65 @@ final class LyricOverlay {
             }
         case .desktop:
             if visible {
+                guard !window.isVisible || window.alphaValue < 1 else { return }
                 window.alphaValue = 0
                 window.orderFront(nil)
                 NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.35
+                    ctx.duration = 0.4
                     window.animator().alphaValue = 1
                 }
             } else {
-                window.orderOut(nil) // fully removed so it can't block clicks
+                guard window.isVisible else { return }
+                NSAnimationContext.runAnimationGroup({ ctx in
+                    ctx.duration = 0.4
+                    window.animator().alphaValue = 0
+                }, completionHandler: { [weak self] in
+                    Task { @MainActor in
+                        guard let self, self.window.alphaValue == 0 else { return }
+                        self.window.orderOut(nil) // fully removed so it can't block clicks
+                    }
+                })
             }
         }
     }
 
     private func saveOrigin() {
-        UserDefaults.standard.set(NSStringFromPoint(window.frame.origin), forKey: Self.originKey)
+        let f = window.frame
+        UserDefaults.standard.set(NSStringFromPoint(NSPoint(x: f.minX, y: f.maxY)), forKey: Self.originKey)
     }
 }
 
-/// Lets the borderless desktop window be dragged by its content.
-final class DraggableHostingView<Content: View>: NSHostingView<Content> {
-    override var mouseDownCanMoveWindow: Bool { true }
+/// Moves the window by following the mouse; driven by a SwiftUI drag gesture so that
+/// buttons inside the card still get their clicks.
+@MainActor
+final class WindowMover {
+    weak var window: NSWindow?
+    var onEnd: (() -> Void)?
+    private var startMouse: NSPoint?
+    private var startOrigin: NSPoint?
+
+    func drag() {
+        guard let window else { return }
+        let mouse = NSEvent.mouseLocation
+        if startMouse == nil {
+            startMouse = mouse
+            startOrigin = window.frame.origin
+        }
+        guard let sm = startMouse, let so = startOrigin else { return }
+        window.setFrameOrigin(NSPoint(x: so.x + mouse.x - sm.x, y: so.y + mouse.y - sm.y))
+    }
+
+    func end() {
+        startMouse = nil
+        startOrigin = nil
+        onEnd?()
+    }
+}
+
+/// Clicks work on the first try even though LyricLock is a background app.
+final class OverlayHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
 }
 
 /// Minimal wrapper around private SkyLight calls, loaded at runtime so the app
