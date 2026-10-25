@@ -10,7 +10,7 @@ final class HotKeys {
     private var refs: [EventHotKeyRef?] = []
     private var installed = false
 
-    static let optCmd = UInt32(cmdKey | optionKey)
+    nonisolated static let optCmd = UInt32(cmdKey | optionKey)
 
     func register(keyCode: Int, modifiers: UInt32 = HotKeys.optCmd, _ action: @escaping () -> Void) {
         install()

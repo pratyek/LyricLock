@@ -96,7 +96,7 @@ To set it up (one time):
 - **Lyrics Screensaver** / **Start Screensaver Now** / **Keep Screen On While Music Plays**
 - **Lyrics Size**: Small, Medium, Large, Extra Large (or drag the corner grip).
 - **Song & Artist Size**: Small, Medium, Large.
-- **Font**: Default, Rounded, Serif.
+- **Font**: 12 built-in fonts (see Lyrics options above).
 - **Show Lyrics Earlier / Later**: nudge timing in 0.25s steps.
 - **Launch at Login**
 
