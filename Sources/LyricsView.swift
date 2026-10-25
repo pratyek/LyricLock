@@ -9,13 +9,17 @@ struct LyricsView: View {
     @ObservedObject var settings = Settings.shared
     let interactive: Bool
     let mover: WindowMover?
-    @State private var hovering = false
+    // Plain ObservableObject instead of @State: on newer SDKs @State is a macro whose
+    // plugin only ships with full Xcode, not the Command Line Tools.
+    @ObservedObject var hover: HoverState
+    private var hovering: Bool { hover.card }
 
     init(player: NowPlaying, lyrics: LyricsController, interactive: Bool, mover: WindowMover?) {
         self.player = player
         self.lyrics = lyrics
         self.interactive = interactive
         self.mover = mover
+        self.hover = HoverState()   // created once per window, so it lives as long as the view
     }
 
     var body: some View {
@@ -76,7 +80,7 @@ struct LyricsView: View {
         .overlay(shape.strokeBorder(Color.white.opacity(hovering ? 0.26 : 0.09), lineWidth: 1))
         .background(aura(palette))
         .contentShape(shape)
-        .onHover { hovering = interactive && $0 }
+        .onHover { hover.card = interactive && $0 }
         .gesture(
             DragGesture(minimumDistance: 3, coordinateSpace: .global)
                 .onChanged { _ in mover?.drag() }
@@ -151,19 +155,19 @@ struct LyricsView: View {
         VStack(spacing: 6) {
             if settings.controlsExpanded {
                 HStack(spacing: 26) {
-                    ControlButton(symbol: "repeat.1", size: 15,
+                    ControlButton(id: "loop", hover: hover, symbol: "repeat.1", size: 15,
                                   active: player.loopEnabled, accent: palette.primary,
                                   help: "Repeat this song") {
                         player.loopEnabled.toggle()
                     }
-                    ControlButton(symbol: "backward.fill", size: 18, help: "Previous") { player.previous() }
-                    ControlButton(symbol: player.isPlaying ? "pause.fill" : "play.fill", size: 22,
+                    ControlButton(id: "prev", hover: hover, symbol: "backward.fill", size: 18, help: "Previous") { player.previous() }
+                    ControlButton(id: "play", hover: hover, symbol: player.isPlaying ? "pause.fill" : "play.fill", size: 22,
                                   prominent: true, accent: palette.primary,
                                   help: player.isPlaying ? "Pause" : "Play") {
                         player.togglePlayPause()
                     }
-                    ControlButton(symbol: "forward.fill", size: 18, help: "Next") { player.next() }
-                    ControlButton(symbol: "list.bullet", size: 15,
+                    ControlButton(id: "next", hover: hover, symbol: "forward.fill", size: 18, help: "Next") { player.next() }
+                    ControlButton(id: "queue", hover: hover, symbol: "list.bullet", size: 15,
                                   help: "Open YouTube Music to see the queue") { player.openPlayer() }
                 }
                 .padding(.top, 4)
@@ -188,7 +192,16 @@ struct LyricsView: View {
     }
 }
 
+/// Hover tracking shared by the card and its buttons.
+@MainActor
+final class HoverState: ObservableObject {
+    @Published var card = false
+    @Published var button: String?
+}
+
 struct ControlButton: View {
+    let id: String
+    @ObservedObject var hover: HoverState
     let symbol: String
     var size: CGFloat = 17
     var active = false
@@ -196,7 +209,7 @@ struct ControlButton: View {
     var accent: Color = .white
     var help: String = ""
     let action: () -> Void
-    @State private var hovering = false
+    private var hovering: Bool { hover.button == id }
 
     var body: some View {
         Button(action: action) {
@@ -216,7 +229,9 @@ struct ControlButton: View {
         }
         .buttonStyle(.plain)
         .help(help)
-        .onHover { hovering = $0 }
+        .onHover { inside in
+            if inside { hover.button = id } else if hover.button == id { hover.button = nil }
+        }
         .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }
