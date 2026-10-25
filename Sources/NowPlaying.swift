@@ -48,6 +48,8 @@ final class NowPlaying: ObservableObject {
         poll()
     }
 
+    var playerBundleIdentifier: String? { playerBundleID }
+
     /// Current playback position in seconds, extrapolated smoothly between polls.
     func position(at date: Date) -> Double {
         guard isPlaying else { return baseElapsed }
@@ -176,9 +178,14 @@ final class NowPlaying: ObservableObject {
             send(["previous-track"], fallback: ["send", "5"])
         }
 
-        let drift = abs(previousPosition - elapsed)
-        if changed || playing != isPlaying || drift > 0.35 {
+        // Snap on big changes (new song, play/pause, seeking); otherwise ease small drift
+        // in gradually so the word animation never visibly jumps.
+        let drift = elapsed - previousPosition
+        if changed || playing != isPlaying || abs(drift) > 1.5 {
             baseElapsed = elapsed
+            baseDate = now
+        } else if abs(drift) > 0.12 {
+            baseElapsed = previousPosition + drift * 0.35
             baseDate = now
         }
         rate = newRate

@@ -23,8 +23,8 @@ enum LyricSize: String, CaseIterable {
         switch self { case .small: return 520; case .medium: return 660; case .large: return 820 }
     }
     var lyricsHeight: CGFloat { fontSize * 5.6 }
-    /// Window is bigger than the card so the glow and hover outline have room.
-    var windowSize: NSSize { NSSize(width: cardWidth + 220, height: lyricsHeight + 330) }
+    /// Window is bigger than the card: room for the glow and for the queue sidebar (310pt).
+    var windowSize: NSSize { NSSize(width: cardWidth + 2 * 330, height: lyricsHeight + 300) }
     var label: String { rawValue.capitalized }
 }
 
@@ -71,6 +71,7 @@ final class Settings: ObservableObject {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let player = NowPlaying()
     private lazy var lyrics = LyricsController(player: player)
+    private lazy var queue = QueueReader(player: player)
     private let settings = Settings.shared
     private var statusItem: NSStatusItem!
     private var lockOverlay: LyricOverlay!
@@ -90,13 +91,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
 
         lockOverlay = LyricOverlay(mode: .lockScreen, size: settings.size) { _ in
-            LyricsView(player: self.player, lyrics: self.lyrics, interactive: false, mover: nil)
+            LyricsView(player: self.player, lyrics: self.lyrics, queue: self.queue, interactive: false, mover: nil)
         }
         lockOverlay.reposition(lower: settings.lowerPosition)
         lockOverlay.attachAboveLockScreen()
 
         desktopOverlay = LyricOverlay(mode: .desktop, size: settings.size) { mover in
-            LyricsView(player: self.player, lyrics: self.lyrics, interactive: true, mover: mover)
+            LyricsView(player: self.player, lyrics: self.lyrics, queue: self.queue, interactive: true, mover: mover)
         }
         desktopOverlay.reposition(lower: settings.lowerPosition)
 
@@ -222,6 +223,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(menu, "Reset Timing", #selector(resetTiming))
         menu.addItem(.separator())
 
+        item(menu, "Save Queue Scan to Desktop", #selector(saveQueueScan))
+        menu.addItem(.separator())
+
         item(menu, "Launch at Login", #selector(toggleLogin),
              on: SMAppService.mainApp.status == .enabled)
         item(menu, "Quit LyricLock", #selector(quit))
@@ -245,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.lowerPosition.toggle()
         lockOverlay.reposition(lower: settings.lowerPosition)
     }
+    @objc private func saveQueueScan() { queue.saveScan() }
     @objc private func toggleAutoHide() { settings.autoHideWhenPaused.toggle(); updateVisibility() }
     @objc private func toggleAura() { settings.lockAura.toggle() }
     @objc private func pickSize(_ sender: NSMenuItem) {

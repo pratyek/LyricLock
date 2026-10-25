@@ -41,16 +41,27 @@ open /Applications/LyricLock.app
 
 1. Play a song in YouTube Music.
 2. Lock your Mac: **Ctrl + Cmd + Q** (or Apple menu → Lock Screen).
-3. The lyrics appear on the lock screen in a translucent glass card tinted with the album's colours, and hide again when you unlock.
+3. The lyrics float on the lock screen, transparent, with words lighting up in the album's colours. They hide again when you unlock.
 
 ### Desktop widget
 
-Turn on **Show on Desktop** in the ♫ menu bar menu. The card sits on your desktop, behind app windows.
+Turn on **Show on Desktop** in the ♫ menu bar menu. The lyrics sit on your desktop, behind app windows. A faint outline appears when you hover.
 
 - **Drag** it anywhere; the spot is remembered.
 - Click the **little chevron** under the lyrics to show or hide controls: repeat, previous, play/pause, next, and a queue button.
 - **Repeat** loops the current song (LyricLock handles this itself).
-- **Queue** brings the YouTube Music window to the front. YouTube Music doesn't share its queue with macOS, so it can't be shown inside the widget.
+- **Queue** slides out an "Up next" sidebar. Click any song in it to play it.
+
+### Queue sidebar setup
+
+YouTube Music doesn't share its queue with macOS, so LyricLock reads it from the YouTube Music window, the way screen readers do. That needs **Accessibility** permission:
+
+1. Click the queue button, then **Allow Access**.
+2. In System Settings → Privacy & Security → Accessibility, turn on **LyricLock**.
+
+After each rebuild, macOS may treat LyricLock as a new app. If the sidebar asks for access again, or shows nothing, remove LyricLock from that list with the **−** button and allow it again.
+
+If the sidebar says it can't find the queue, open the player in YouTube Music (click the song at the bottom of its window) and press refresh. If it still can't, click **Save Scan for Claude** (or ♫ → Save Queue Scan to Desktop) and send the `LyricLock-queue-scan.txt` file from your Desktop to Claude.
 
 ### Menu options
 
@@ -76,8 +87,9 @@ rm -rf /Applications/LyricLock.app && mv build/LyricLock.app /Applications/ && o
 |---|---|
 | `NowPlaying.swift` | Polls `media-control get` once a second for title, artist and playback position, and extrapolates smoothly between polls. Works with any player that shows in the system media controls, not just YouTube Music. |
 | `Lyrics.swift` | Fetches time-synced lyrics from [LRCLIB](https://lrclib.net) (free, no account) and parses the LRC format. Strips "(Official Video)", "(From \"Film\")" and extra artists so more songs match. |
-| `LyricsView.swift` | Glass card: words light up one by one in the song's colour as they're sung, other lines blur and fade, breathing dots during instrumentals, collapsible controls. |
+| `LyricsView.swift` | Transparent lyrics: words light up one by one in the song's colour, only the 5 nearby lines are drawn so it stays at 60 fps, breathing dots during instrumentals, collapsible controls and the queue sidebar. |
 | `Palette.swift` | Pulls the main colours out of the album art. |
+| `Queue.swift` | Reads YouTube Music's "Up next" list through the Accessibility API and plays a song when you click it. |
 | `Overlay.swift` | Lock-screen window moved into a SkyLight window-server space above the lock screen (the technique WidgetScreen and Atoll use), plus the draggable desktop window. |
 
 ## Good to know
