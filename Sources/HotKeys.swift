@@ -10,9 +10,10 @@ final class HotKeys {
     private var refs: [EventHotKeyRef?] = []
     private var installed = false
 
-    nonisolated static let optCmd = UInt32(cmdKey | optionKey)
+    /// ⌃⌥⌘ (Control-Option-Command): a combo apps practically never use, so nothing is stolen.
+    nonisolated static let ctrlOptCmd = UInt32(controlKey | optionKey | cmdKey)
 
-    func register(keyCode: Int, modifiers: UInt32 = HotKeys.optCmd, _ action: @escaping () -> Void) {
+    func register(keyCode: Int, modifiers: UInt32 = HotKeys.ctrlOptCmd, _ action: @escaping () -> Void) {
         install()
         let id = UInt32(handlers.count + 1)
         handlers[id] = action
@@ -23,6 +24,12 @@ final class HotKeys {
     }
 
     fileprivate func fire(_ id: UInt32) { handlers[id]?() }
+
+    func unregisterAll() {
+        for ref in refs { if let ref { UnregisterEventHotKey(ref) } }
+        refs.removeAll()
+        handlers.removeAll()
+    }
 
     private func install() {
         guard !installed else { return }

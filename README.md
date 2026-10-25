@@ -67,13 +67,16 @@ The lock screen works the same way: collapse, play/pause and the controls are al
 
 ### Keyboard shortcuts (work from any app)
 
+All use **⌃⌥⌘** (Control + Option + Command), so they don't clash with shortcuts in other apps. Turn them off in ♫ → Keyboard Shortcuts → Enable Shortcuts.
+
 | Keys | Action |
 |---|---|
-| ⌥⌘L | Show / hide desktop lyrics |
-| ⌥⌘P | Play / pause |
-| ⌥⌘→ / ⌥⌘← | Next / previous song |
-| ⌥⌘= / ⌥⌘− | Bigger / smaller lyrics |
-| ⌥⌘S | Save the current lyric as an image (Pictures › LyricLock, also copied to clipboard) |
+| ⌃⌥⌘L | Show / hide desktop lyrics |
+| ⌃⌥⌘P | Play / pause |
+| ⌃⌥⌘→ / ⌃⌥⌘← | Next / previous song |
+| ⌃⌥⌘= / ⌃⌥⌘− | Bigger / smaller lyrics |
+| ⌃⌥⌘S | Save the current lyric as an image (Pictures › LyricLock, also copied to clipboard) |
+| ⌃⌥⌘H | Hide everything right now |
 
 ### Screensaver
 
@@ -84,6 +87,8 @@ To set it up (one time):
 1. **System Settings → Lock Screen → Start Screen Saver when inactive**: pick a time, e.g. 2 minutes.
 2. Same page: **Require password after screen saver begins** → *Immediately* if you want it to lock too.
 3. Optional, to start it instantly: **System Settings → Desktop & Dock → Hot Corners…** → pick a corner → *Start Screen Saver*. Or use ♫ → **Start Screensaver Now**.
+
+**Leaving the screensaver**: move the mouse or press any key, like with any screen saver. LyricLock's scene disappears immediately.
 
 **Keep Screen On While Music Plays** (on by default) stops the display from going dark while music plays on the lock screen or screensaver. It lets the screen sleep normally once you pause.
 
@@ -132,6 +137,8 @@ rm -rf /Applications/LyricLock.app && mv build/LyricLock.app /Applications/ && o
 - **Personal use only.** Not App Store-safe because of the private API.
 
 ## Troubleshooting
+
+- **Anything ever feels stuck.** Press ⌃⌥⌘H to hide all LyricLock windows, or quit from the ♫ menu. In Terminal, `killall LyricLock` always works.
 
 - **Menu says "media-control not installed".** Run step 2, then quit and reopen LyricLock.
 - **Menu says "Nothing playing" while music plays.** Run `media-control get` in Terminal. If that's empty too, the issue is the Now Playing feed, not LyricLock; try pausing and resuming in YouTube Music.

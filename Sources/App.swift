@@ -112,10 +112,12 @@ final class Settings: ObservableObject {
     @Published var translate: Bool { didSet { defaults.set(translate, forKey: "translate") } }
     @Published var menuBarLyric: Bool { didSet { defaults.set(menuBarLyric, forKey: "menuBarLyric") } }
     @Published var collapsed: Bool { didSet { defaults.set(collapsed, forKey: "collapsed") } }
+    @Published var shortcuts: Bool { didSet { defaults.set(shortcuts, forKey: "shortcuts") } }
 
     private init() {
         defaults.register(defaults: ["lockAura": true, "autoHide": true, "screensaver": true, "keepAwake": true,
-                                     "scale": 1.0, "controlsExpanded": true, "glow": true])
+                                     "scale": 1.0, "controlsExpanded": true, "glow": true,
+                                     "shortcuts": true])
         offset = defaults.double(forKey: "offset")
         showOnDesktop = defaults.bool(forKey: "showOnDesktop")
         lowerPosition = defaults.bool(forKey: "lowerPosition")
@@ -132,6 +134,7 @@ final class Settings: ObservableObject {
         translate = defaults.bool(forKey: "translate")
         menuBarLyric = defaults.bool(forKey: "menuBarLyric")
         collapsed = defaults.bool(forKey: "collapsed")
+        shortcuts = defaults.bool(forKey: "shortcuts")
     }
 }
 
@@ -145,6 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var desktopOverlay: LyricOverlay!
     private var screensaverOverlay: LyricOverlay!
     private var isScreensaver = false
+    private var saverStartedAt = Date.distantPast
+    private var saverWatch: Timer?
     private var displayAssertion: IOPMAssertionID = 0
     private var menuBarTimer: Timer?
     private var searchWindow: NSWindow?
@@ -219,8 +224,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func screenLocked() { isLocked = true; updateVisibility() }
     @objc private func screenUnlocked() { isLocked = false; updateVisibility() }
-    @objc private func screensaverStarted() { isScreensaver = true; updateVisibility() }
-    @objc private func screensaverStopped() { isScreensaver = false; updateVisibility() }
+    @objc private func screensaverStarted() {
+        isScreensaver = true
+        saverStartedAt = Date()
+        updateVisibility()
+        // Safety net: hide the scene the moment you touch the mouse or keyboard, or if the
+        // screen saver goes away without telling us. You can never get stuck behind it.
+        saverWatch?.invalidate()
+        saverWatch = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkScreensaver() }
+        }
+    }
+    @objc private func screensaverStopped() { endScreensaver() }
+
+    private func checkScreensaver() {
+        guard isScreensaver else { saverWatch?.invalidate(); return }
+        let age = Date().timeIntervalSince(saverStartedAt)
+        let types: [CGEventType] = [.mouseMoved, .keyDown, .leftMouseDown, .rightMouseDown,
+                                    .scrollWheel, .flagsChanged, .otherMouseDown]
+        let idle = types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 999
+        let engineRunning = NSWorkspace.shared.runningApplications.contains { app in
+            app.bundleIdentifier == "com.apple.ScreenSaver.Engine" || app.localizedName == "ScreenSaverEngine"
+        }
+        if (age > 1.5 && idle < 0.5) || (age > 3 && !engineRunning) { endScreensaver() }
+    }
+
+    private func endScreensaver() {
+        saverWatch?.invalidate()
+        saverWatch = nil
+        guard isScreensaver else { return }
+        isScreensaver = false
+        updateVisibility()
+    }
     @objc private func screensChanged() {
         screensaverOverlay.reposition(lower: false)
         lockOverlay.reposition(lower: settings.lowerPosition)
@@ -352,10 +387,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         let keys = NSMenu()
-        for (label, combo) in [("Show / Hide Desktop Lyrics", "⌥⌘L"), ("Play / Pause", "⌥⌘P"),
-                               ("Next Song", "⌥⌘→"), ("Previous Song", "⌥⌘←"),
-                               ("Bigger Lyrics", "⌥⌘="), ("Smaller Lyrics", "⌥⌘−"),
-                               ("Save Lyric Image", "⌥⌘S")] {
+        let on = NSMenuItem(title: "Enable Shortcuts", action: #selector(toggleShortcuts), keyEquivalent: "")
+        on.target = self
+        on.state = settings.shortcuts ? .on : .off
+        keys.addItem(on)
+        keys.addItem(.separator())
+        for (label, combo) in [("Show / Hide Desktop Lyrics", "⌃⌥⌘L"), ("Play / Pause", "⌃⌥⌘P"),
+                               ("Next Song", "⌃⌥⌘→"), ("Previous Song", "⌃⌥⌘←"),
+                               ("Bigger Lyrics", "⌃⌥⌘="), ("Smaller Lyrics", "⌃⌥⌘−"),
+                               ("Save Lyric Image", "⌃⌥⌘S"), ("Hide Everything", "⌃⌥⌘H")] {
             let i = NSMenuItem(title: "\(combo)   \(label)", action: nil, keyEquivalent: "")
             i.isEnabled = false
             keys.addItem(i)
@@ -433,8 +473,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if button.title != title { button.title = title }
     }
 
+    @objc private func toggleShortcuts() {
+        settings.shortcuts.toggle()
+        registerShortcuts()
+    }
+
+    /// Emergency: hide every LyricLock window right now.
+    private func hideEverything() {
+        endScreensaver()
+        settings.showOnDesktop = false
+        updateVisibility()
+    }
+
     private func registerShortcuts() {
         let keys = HotKeys.shared
+        keys.unregisterAll()
+        guard settings.shortcuts else { return }
+        keys.register(keyCode: kVK_ANSI_H) { [weak self] in self?.hideEverything() }
         keys.register(keyCode: kVK_ANSI_L) { [weak self] in self?.toggleDesktop() }
         keys.register(keyCode: kVK_ANSI_P) { [weak self] in self?.player.togglePlayPause() }
         keys.register(keyCode: kVK_RightArrow) { [weak self] in self?.player.next() }

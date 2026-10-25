@@ -39,6 +39,10 @@ struct LyricsView: View {
         }
         .padding(.top, 60)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Tell the window where the card is, so it only takes clicks there.
+        .onPreferenceChange(CardFrameKey.self) { [mover] rect in
+            Task { @MainActor in mover?.cardRect = rect }
+        }
         .animation(.easeInOut(duration: 0.5), value: player.track)
         .animation(.spring(response: 0.45, dampingFraction: 0.86), value: settings.collapsed)
         .environment(\.colorScheme, .dark)
@@ -103,6 +107,9 @@ struct LyricsView: View {
             if isDesktop && !collapsed { resizeGrip(visible: hovering) }
         }
         .background(aura(palette))
+        .background(GeometryReader { g in
+            Color.clear.preference(key: CardFrameKey.self, value: g.frame(in: .global))
+        })
         .contentShape(shape)
         .onHover { hover.card = $0 }
         .gesture(
@@ -115,10 +122,11 @@ struct LyricsView: View {
             MagnifyGesture()
                 .onChanged { value in
                     if hover.resizeStart == nil { hover.resizeStart = settings.scale }
+                    mover?.isInteracting = true
                     let start = hover.resizeStart ?? settings.scale
                     settings.scale = Metrics.clamp(start * value.magnification)
                 }
-                .onEnded { _ in hover.resizeStart = nil },
+                .onEnded { _ in hover.resizeStart = nil; mover?.isInteracting = false },
             including: isDesktop ? .all : .subviews
         )
         .opacity(player.isPlaying ? 1 : 0.75)
@@ -156,12 +164,13 @@ struct LyricsView: View {
                 DragGesture(minimumDistance: 0, coordinateSpace: .global)
                     .onChanged { value in
                         if hover.resizeStart == nil { hover.resizeStart = settings.scale }
+                        mover?.isInteracting = true
                         let start = hover.resizeStart ?? settings.scale
                         // The card grows around its centre, so its corner moves half the width change.
                         let delta = (value.translation.width - value.translation.height * 0.5) / 330
                         settings.scale = Metrics.clamp(start + delta)
                     }
-                    .onEnded { _ in hover.resizeStart = nil }
+                    .onEnded { _ in hover.resizeStart = nil; mover?.isInteracting = false }
             )
     }
 
@@ -499,5 +508,14 @@ struct LyricLineView: View {
         // While browsing, mark the live line with a little extra brightness so you can find it.
         .opacity(focused ? 1 : (isLive && browsing ? 0.75 : max(0.12, 0.5 - d * 0.16)))
         .blur(radius: focused ? 0 : 1.0 + d * 0.9)
+    }
+}
+
+/// The lyrics card's frame inside its window.
+struct CardFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let n = nextValue()
+        if n.width > 0 { value = n }
     }
 }

@@ -1,7 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// Two kinds of lyric windows share this class:
+/// Lyric windows. Important safety rule: every window ignores the mouse by default, and only
+/// takes clicks while the pointer is actually over the visible lyrics card (checked 20× a
+/// second). So an invisible or transparent part of a window can never block your Mac.
+///
+/// Kinds:
 /// - `.lockScreen`: click-through, moved into a SkyLight (WindowServer) space above the
 ///   lock screen. Only made visible while the Mac is locked.
 /// - `.desktop`: sits on the desktop layer, behind every app window, like a desktop widget.
@@ -14,6 +18,8 @@ final class LyricOverlay {
     private let mode: Mode
     private let mover = WindowMover()
     private(set) var isAboveLockScreen = false
+    private var shown = false
+    private var mouseTimer: Timer?
     private static let originKey = "desktopTopLeft"
 
     init<V: View>(mode: Mode, @ViewBuilder content: (WindowMover?) -> V) {
@@ -36,19 +42,40 @@ final class LyricOverlay {
 
         switch mode {
         case .lockScreen, .screensaver:
-            // Lock screen takes clicks (play/pause, tap a line); the screensaver never does,
-            // since any mouse movement there is meant to wake the Mac.
-            window.ignoresMouseEvents = mode == .screensaver
+            window.ignoresMouseEvents = true
             window.canBecomeVisibleWithoutLogin = true
             window.level = .screenSaver
             window.alphaValue = 0
         case .desktop:
             // Just above the desktop icons, below every normal app window.
             window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
-            window.ignoresMouseEvents = false
+            window.ignoresMouseEvents = true
             mover.window = window
             mover.onEnd = { [weak self] in self?.saveOrigin() }
         }
+
+        // The screensaver never takes the mouse: any movement there should wake the Mac.
+        if mode != .screensaver {
+            mouseTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.updateMousePassThrough() }
+            }
+        }
+    }
+
+    /// Take mouse events only while the pointer is over the visible lyrics card.
+    private func updateMousePassThrough() {
+        var accept = false
+        if shown, window.alphaValue > 0.5, mover.cardRect.width > 1 {
+            if mover.isInteracting {
+                accept = true   // keep the drag/resize going even if the pointer slips outside
+            } else {
+                let f = window.frame
+                let r = mover.cardRect
+                let onScreen = NSRect(x: f.minX + r.minX, y: f.maxY - r.maxY, width: r.width, height: r.height)
+                accept = onScreen.insetBy(dx: -4, dy: -4).contains(NSEvent.mouseLocation)
+            }
+        }
+        if window.ignoresMouseEvents == accept { window.ignoresMouseEvents = !accept }
     }
 
     func attachAboveLockScreen() {
@@ -87,6 +114,8 @@ final class LyricOverlay {
     }
 
     func setVisible(_ visible: Bool) {
+        shown = visible
+        if !visible { window.ignoresMouseEvents = true }
         switch mode {
         case .lockScreen, .screensaver:
             // Never order out: that would pull the window out of the lock-screen space.
@@ -130,12 +159,17 @@ final class LyricOverlay {
 final class WindowMover {
     weak var window: NSWindow?
     let browse = BrowseState()
+    /// Where the lyrics card is inside the window (top-left origin), reported by the view.
+    var cardRect: CGRect = .zero
+    /// True while dragging or resizing.
+    var isInteracting = false
     var onEnd: (() -> Void)?
     private var startMouse: NSPoint?
     private var startOrigin: NSPoint?
 
     func drag() {
         guard let window else { return }
+        isInteracting = true
         let mouse = NSEvent.mouseLocation
         if startMouse == nil {
             startMouse = mouse
@@ -146,6 +180,7 @@ final class WindowMover {
     }
 
     func end() {
+        isInteracting = false
         startMouse = nil
         startOrigin = nil
         onEnd?()
