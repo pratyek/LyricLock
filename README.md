@@ -45,13 +45,35 @@ open /Applications/LyricLock.app
 
 ### Desktop widget
 
-Turn on **Show on Desktop** in the ♫ menu bar menu. The lyrics sit on your desktop, behind app windows. A faint outline appears when you hover.
+Turn on **Show on Desktop** in the ♫ menu bar menu. The lyrics sit on your desktop, behind app windows. Extras only appear while you hover, so it stays clean.
 
 - **Drag** it anywhere; the spot is remembered.
-- **Resize**: hover and drag the corner grip (bottom right) to make the lyrics any size, or pick a preset in ♫ → Lyrics Size.
-- Click the **little chevron** under the lyrics to show or hide controls: repeat, previous, play/pause, next, and a queue button.
-- **Repeat** loops the current song (LyricLock handles this itself).
-- **Queue** brings the YouTube Music window to the front, where its queue is.
+- **Resize**: pinch on the trackpad, drag the corner grip (bottom right), press ⌥⌘= / ⌥⌘−, or pick ♫ → Lyrics Size.
+- **Scroll** over the lyrics to look back (or ahead). It glides back to the live line after a few seconds.
+- **Click a line** to jump the song to it.
+- **Collapse** (hover → ˄ top right): shrinks to one line with the song and a play/pause button. Hover → ˅ to expand.
+- **Controls** (hover → chevron under the lyrics): repeat, previous, play/pause, next, save lyric image, open YouTube Music.
+
+The lock screen works the same way: collapse, play/pause and the controls are all there too.
+
+### Lyrics options (♫ menu)
+
+- **Glow** on or off.
+- **Romanize Lyrics**: shows Tamil, Hindi, Japanese and other scripts in English letters (offline, built into macOS).
+- **Show English Translation**: a small translation under the current line, using Apple's on-device translator (macOS 26). If a language needs downloading, the menu tells you where. Apple's translator doesn't cover every language (Tamil, for example, may not be available).
+- **Show Lyric in Menu Bar**: the current line next to the ♫ icon.
+- **Find Lyrics for This Song…**: search and pick the right lyrics if they're wrong or missing. Your pick is remembered.
+- **Font**: SF Pro, SF Rounded, New York, SF Mono, Avenir Next, Futura, Didot, Gill Sans, Optima, Baskerville, American Typewriter, Noteworthy.
+
+### Keyboard shortcuts (work from any app)
+
+| Keys | Action |
+|---|---|
+| ⌥⌘L | Show / hide desktop lyrics |
+| ⌥⌘P | Play / pause |
+| ⌥⌘→ / ⌥⌘← | Next / previous song |
+| ⌥⌘= / ⌥⌘− | Bigger / smaller lyrics |
+| ⌥⌘S | Save the current lyric as an image (Pictures › LyricLock, also copied to clipboard) |
 
 ### Screensaver
 
@@ -94,6 +116,10 @@ rm -rf /Applications/LyricLock.app && mv build/LyricLock.app /Applications/ && o
 | `Lyrics.swift` | Fetches time-synced lyrics from [LRCLIB](https://lrclib.net) (free, no account) and parses the LRC format. Strips "(Official Video)", "(From \"Film\")" and extra artists so more songs match. |
 | `LyricsView.swift` | Transparent lyrics: line-by-line animation with the current line glowing in the song's colour, only the 5 nearby lines are drawn so it stays at 60 fps, breathing dots during instrumentals, resize grip and collapsible controls. |
 | `Palette.swift` | Pulls the main colours out of the album art. |
+| `Translator.swift` | English translation via Apple's Translation framework. |
+| `LyricSearch.swift` | The Find Lyrics window. |
+| `HotKeys.swift` | System-wide shortcuts (no permissions needed). |
+| `ShareCard.swift` | Renders the lyric image card. |
 | `ScreensaverView.swift` | The full-screen scene shown over the screen saver. |
 | `Assets/` | App icon (`make_icon.py` regenerates it). |
 | `Overlay.swift` | Lock-screen window moved into a SkyLight window-server space above the lock screen (the technique WidgetScreen and Atoll use), plus the draggable desktop window. |

@@ -90,7 +90,10 @@ struct ScreensaverView: View {
                            duration: track.duration,
                            palette: player.palette,
                            metrics: .screen,
-                           font: settings.font)
+                           font: settings.font,
+                           glow: settings.glow,
+                           romanize: settings.romanize,
+                           showTranslation: settings.translate)
             }
             .frame(width: width, height: Metrics.screen.lyricsHeight)
         default:

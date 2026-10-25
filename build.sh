@@ -11,7 +11,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "-> Compiling for ${ARCH}..."
 swiftc -O -parse-as-library \
-  -target "${ARCH}-apple-macos14.0" \
+  -target "${ARCH}-apple-macos15.0" \
   Sources/*.swift \
   -o "$APP/Contents/MacOS/LyricLock"
 
@@ -29,9 +29,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>LyricLock</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.4</string>
+  <key>CFBundleShortVersionString</key><string>1.7</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict>

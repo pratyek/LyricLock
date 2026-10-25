@@ -27,14 +27,19 @@ final class LyricOverlay {
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
-        let host = OverlayHostingView(rootView: content(mode == .desktop ? mover : nil))
+        let host = OverlayHostingView(rootView: content(mode == .screensaver ? nil : mover))
+        let browse = mover.browse
+        host.onScroll = { event in browse.scroll(event) }
         host.frame = NSRect(origin: .zero, size: frame.size)
         host.autoresizingMask = [.width, .height]
         window.contentView = host
 
         switch mode {
         case .lockScreen, .screensaver:
-            window.ignoresMouseEvents = true
+            // Lock screen takes clicks (play/pause, tap a line); the screensaver never does,
+            // since any mouse movement there is meant to wake the Mac.
+            window.ignoresMouseEvents = mode == .screensaver
+            window.canBecomeVisibleWithoutLogin = true
             window.level = .screenSaver
             window.alphaValue = 0
         case .desktop:
@@ -124,6 +129,7 @@ final class LyricOverlay {
 @MainActor
 final class WindowMover {
     weak var window: NSWindow?
+    let browse = BrowseState()
     var onEnd: (() -> Void)?
     private var startMouse: NSPoint?
     private var startOrigin: NSPoint?
@@ -148,7 +154,9 @@ final class WindowMover {
 
 /// Clicks work on the first try even though LyricLock is a background app.
 final class OverlayHostingView<Content: View>: NSHostingView<Content> {
+    var onScroll: ((NSEvent) -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func scrollWheel(with event: NSEvent) { onScroll?(event) }
     override var mouseDownCanMoveWindow: Bool { false }
 }
 
@@ -184,5 +192,42 @@ enum SkyLight {
         _ = showSpaces(connection, [NSNumber(value: space)] as CFArray)
         _ = addWindows(connection, space, [NSNumber(value: window.windowNumber)] as CFArray, 7)
         return true
+    }
+}
+
+/// Scroll over the lyrics to look back (or ahead); after a few seconds without scrolling
+/// it glides back to the live line.
+@MainActor
+final class BrowseState: ObservableObject {
+    @Published private(set) var offset = 0
+    private var accumulated: CGFloat = 0
+    private var resetTask: Task<Void, Never>?
+
+    func scroll(_ event: NSEvent) {
+        let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 14
+        accumulated += dy
+        let step: CGFloat = 34
+        var changed = false
+        while accumulated >= step { accumulated -= step; offset -= 1; changed = true }
+        while accumulated <= -step { accumulated += step; offset += 1; changed = true }
+        guard changed || offset != 0 else { return }
+        resetTask?.cancel()
+        resetTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.reset()
+        }
+    }
+
+    /// Clamp after the view knows how many lines there are.
+    func clamp(to range: ClosedRange<Int>) {
+        if offset < range.lowerBound { offset = range.lowerBound }
+        if offset > range.upperBound { offset = range.upperBound }
+    }
+
+    func reset() {
+        resetTask?.cancel()
+        accumulated = 0
+        if offset != 0 { offset = 0 }
     }
 }

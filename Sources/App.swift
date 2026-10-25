@@ -3,6 +3,7 @@ import SwiftUI
 import Combine
 import ServiceManagement
 import IOKit.pwr_mgt
+import Carbon.HIToolbox
 
 @main
 enum LyricLockMain {
@@ -26,6 +27,7 @@ struct Metrics: Equatable {
     /// Fixed window big enough for the largest scale; the transparent rest lets clicks through.
     static let windowSize = NSSize(width: 660 * maxScale + 240, height: 31 * maxScale * 5.6 + 320)
     static let screen = Metrics(scale: 1.8)
+    static func clamp(_ s: Double) -> Double { min(max(s, minScale), maxScale) }
 }
 
 enum LyricSize: String, CaseIterable {
@@ -47,14 +49,44 @@ enum TitleSize: String, CaseIterable {
 }
 
 enum LyricFont: String, CaseIterable {
-    case standard, rounded, serif
-    var design: Font.Design {
-        switch self { case .standard: return .default; case .rounded: return .rounded; case .serif: return .serif }
-    }
-    var weight: Font.Weight { self == .serif ? .bold : .heavy }
+    case standard, rounded, serif, mono, avenir, futura, didot, gillSans, optima, baskerville, typewriter, noteworthy
+
     var label: String {
-        switch self { case .standard: return "Default"; case .rounded: return "Rounded"; case .serif: return "Serif" }
+        switch self {
+        case .standard: return "SF Pro (Default)"
+        case .rounded: return "SF Rounded"
+        case .serif: return "New York (Serif)"
+        case .mono: return "SF Mono"
+        case .avenir: return "Avenir Next"
+        case .futura: return "Futura"
+        case .didot: return "Didot"
+        case .gillSans: return "Gill Sans"
+        case .optima: return "Optima"
+        case .baskerville: return "Baskerville"
+        case .typewriter: return "American Typewriter"
+        case .noteworthy: return "Noteworthy"
+        }
     }
+
+    /// All built into macOS. Scripts these fonts don't cover (e.g. Tamil) fall back to the system font.
+    func font(size: CGFloat) -> Font {
+        switch self {
+        case .standard: return .system(size: size, weight: .heavy)
+        case .rounded: return .system(size: size, weight: .heavy, design: .rounded)
+        case .serif: return .system(size: size, weight: .bold, design: .serif)
+        case .mono: return .system(size: size * 0.9, weight: .bold, design: .monospaced)
+        case .avenir: return .custom("AvenirNext-Bold", size: size)
+        case .futura: return .custom("Futura-Bold", size: size)
+        case .didot: return .custom("Didot-Bold", size: size)
+        case .gillSans: return .custom("GillSans-SemiBold", size: size)
+        case .optima: return .custom("Optima-Bold", size: size)
+        case .baskerville: return .custom("Baskerville-Bold", size: size)
+        case .typewriter: return .custom("AmericanTypewriter-Semibold", size: size)
+        case .noteworthy: return .custom("Noteworthy-Bold", size: size)
+        }
+    }
+
+    var tracking: CGFloat { (self == .standard || self == .rounded) ? -0.3 : 0 }
 }
 
 @MainActor
@@ -75,10 +107,15 @@ final class Settings: ObservableObject {
     @Published var controlsExpanded: Bool { didSet { defaults.set(controlsExpanded, forKey: "controlsExpanded") } }
     @Published var screensaver: Bool { didSet { defaults.set(screensaver, forKey: "screensaver") } }
     @Published var keepAwake: Bool { didSet { defaults.set(keepAwake, forKey: "keepAwake") } }
+    @Published var glow: Bool { didSet { defaults.set(glow, forKey: "glow") } }
+    @Published var romanize: Bool { didSet { defaults.set(romanize, forKey: "romanize") } }
+    @Published var translate: Bool { didSet { defaults.set(translate, forKey: "translate") } }
+    @Published var menuBarLyric: Bool { didSet { defaults.set(menuBarLyric, forKey: "menuBarLyric") } }
+    @Published var collapsed: Bool { didSet { defaults.set(collapsed, forKey: "collapsed") } }
 
     private init() {
         defaults.register(defaults: ["lockAura": true, "autoHide": true, "screensaver": true, "keepAwake": true,
-                                     "scale": 1.0, "controlsExpanded": true])
+                                     "scale": 1.0, "controlsExpanded": true, "glow": true])
         offset = defaults.double(forKey: "offset")
         showOnDesktop = defaults.bool(forKey: "showOnDesktop")
         lowerPosition = defaults.bool(forKey: "lowerPosition")
@@ -90,6 +127,11 @@ final class Settings: ObservableObject {
         controlsExpanded = defaults.bool(forKey: "controlsExpanded")
         screensaver = defaults.bool(forKey: "screensaver")
         keepAwake = defaults.bool(forKey: "keepAwake")
+        glow = defaults.bool(forKey: "glow")
+        romanize = defaults.bool(forKey: "romanize")
+        translate = defaults.bool(forKey: "translate")
+        menuBarLyric = defaults.bool(forKey: "menuBarLyric")
+        collapsed = defaults.bool(forKey: "collapsed")
     }
 }
 
@@ -104,6 +146,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var screensaverOverlay: LyricOverlay!
     private var isScreensaver = false
     private var displayAssertion: IOPMAssertionID = 0
+    private var menuBarTimer: Timer?
+    private var searchWindow: NSWindow?
+    private lazy var searchModel = LyricSearchModel(lyrics: lyrics, player: player)
     private var isLocked = false
     private var hasTrack = false
     private var pausedLong = false
@@ -118,14 +163,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
-        lockOverlay = LyricOverlay(mode: .lockScreen) { _ in
-            LyricsView(player: self.player, lyrics: self.lyrics, interactive: false, mover: nil)
+        lockOverlay = LyricOverlay(mode: .lockScreen) {
+            LyricsView(player: self.player, lyrics: self.lyrics, place: .lockScreen, mover: $0)
         }
         lockOverlay.reposition(lower: settings.lowerPosition)
         lockOverlay.attachAboveLockScreen()
 
         desktopOverlay = LyricOverlay(mode: .desktop) { mover in
-            LyricsView(player: self.player, lyrics: self.lyrics, interactive: true, mover: mover)
+            LyricsView(player: self.player, lyrics: self.lyrics, place: .desktop, mover: mover)
         }
         desktopOverlay.reposition(lower: settings.lowerPosition)
 
@@ -164,6 +209,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         _ = lyrics // start observing
         player.start()
+        registerShortcuts()
+        menuBarTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateMenuBarLyric() }
+        }
     }
 
     // MARK: Lock state
@@ -247,6 +296,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(menu, "Keep Screen On While Music Plays", #selector(toggleKeepAwake), on: settings.keepAwake)
         menu.addItem(.separator())
 
+        item(menu, "Glow", #selector(toggleGlow), on: settings.glow)
+        item(menu, "Romanize Lyrics (English Letters)", #selector(toggleRomanize), on: settings.romanize)
+        item(menu, "Show English Translation", #selector(toggleTranslate), on: settings.translate)
+        if settings.translate, let note = lyrics.translationNote { info(menu, "   " + note) }
+        item(menu, "Show Lyric in Menu Bar", #selector(toggleMenuBarLyric), on: settings.menuBarLyric)
+        item(menu, "Find Lyrics for This Song…", #selector(openSearch))
+        menu.addItem(.separator())
+
         let sizeMenu = NSMenu()
         for size in LyricSize.allCases {
             let i = NSMenuItem(title: size.label, action: #selector(pickSize(_:)), keyEquivalent: "")
@@ -294,6 +351,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(menu, "Reset Timing", #selector(resetTiming))
         menu.addItem(.separator())
 
+        let keys = NSMenu()
+        for (label, combo) in [("Show / Hide Desktop Lyrics", "⌥⌘L"), ("Play / Pause", "⌥⌘P"),
+                               ("Next Song", "⌥⌘→"), ("Previous Song", "⌥⌘←"),
+                               ("Bigger Lyrics", "⌥⌘="), ("Smaller Lyrics", "⌥⌘−"),
+                               ("Save Lyric Image", "⌥⌘S")] {
+            let i = NSMenuItem(title: "\(combo)   \(label)", action: nil, keyEquivalent: "")
+            i.isEnabled = false
+            keys.addItem(i)
+        }
+        let keysItem = NSMenuItem(title: "Keyboard Shortcuts", action: nil, keyEquivalent: "")
+        keysItem.submenu = keys
+        menu.addItem(keysItem)
+
         item(menu, "Launch at Login", #selector(toggleLogin),
              on: SMAppService.mainApp.status == .enabled)
         item(menu, "Quit LyricLock", #selector(quit))
@@ -322,6 +392,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func startScreensaver() {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app"))
     }
+    @objc private func toggleGlow() { settings.glow.toggle() }
+    @objc private func toggleRomanize() { settings.romanize.toggle() }
+    @objc private func toggleTranslate() {
+        settings.translate.toggle()
+        if settings.translate { lyrics.translateCurrent() } else { lyrics.clearTranslations() }
+    }
+    @objc private func toggleMenuBarLyric() { settings.menuBarLyric.toggle(); updateMenuBarLyric() }
+
+    @objc private func openSearch() {
+        if searchWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 520),
+                             styleMask: [.titled, .closable, .fullSizeContentView],
+                             backing: .buffered, defer: false)
+            w.titlebarAppearsTransparent = true
+            w.title = "Find Lyrics"
+            w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: LyricSearchView(model: searchModel))
+            w.center()
+            searchModel.onDone = { [weak w] in w?.close() }
+            searchWindow = w
+        }
+        searchModel.prefill()
+        NSApp.activate()
+        searchWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Current lyric line next to the ♫ icon.
+    private func updateMenuBarLyric() {
+        guard let button = statusItem.button else { return }
+        var text = ""
+        if settings.menuBarLyric, let l = lyrics.currentLyrics, let t = player.track {
+            let i = l.index(at: player.position(at: Date()) + settings.offset + LyricStack.lead, duration: t.duration)
+            if i >= 0 {
+                let line = l.lines[i].display(romanize: settings.romanize).trimmingCharacters(in: .whitespaces)
+                text = line.count > 42 ? String(line.prefix(40)) + "…" : line
+            }
+        }
+        let title = text.isEmpty ? "" : " " + text
+        if button.title != title { button.title = title }
+    }
+
+    private func registerShortcuts() {
+        let keys = HotKeys.shared
+        keys.register(keyCode: kVK_ANSI_L) { [weak self] in self?.toggleDesktop() }
+        keys.register(keyCode: kVK_ANSI_P) { [weak self] in self?.player.togglePlayPause() }
+        keys.register(keyCode: kVK_RightArrow) { [weak self] in self?.player.next() }
+        keys.register(keyCode: kVK_LeftArrow) { [weak self] in self?.player.previous() }
+        keys.register(keyCode: kVK_ANSI_Equal) { [weak self] in self?.nudgeSize(0.1) }
+        keys.register(keyCode: kVK_ANSI_Minus) { [weak self] in self?.nudgeSize(-0.1) }
+        keys.register(keyCode: kVK_ANSI_S) { [weak self] in self?.saveLyricImage() }
+    }
+
+    private func nudgeSize(_ delta: Double) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            settings.scale = Metrics.clamp(settings.scale + delta)
+        }
+    }
+
+    private func saveLyricImage() {
+        guard let l = lyrics.currentLyrics, let t = player.track else { NSSound.beep(); return }
+        let i = l.index(at: player.position(at: Date()) + settings.offset + LyricStack.lead, duration: t.duration)
+        ShareCard.save(line: l.lines[max(i, 0)].display(romanize: settings.romanize),
+                       title: LyricsService.cleanTitle(t.title), artist: LyricsService.primaryArtist(t.artist),
+                       artwork: player.artwork, palette: player.palette, font: settings.font)
+    }
+
     @objc private func toggleAutoHide() { settings.autoHideWhenPaused.toggle(); updateVisibility() }
     @objc private func toggleAura() { settings.lockAura.toggle() }
     @objc private func pickSize(_ sender: NSMenuItem) {

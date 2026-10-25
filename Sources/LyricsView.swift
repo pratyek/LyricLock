@@ -1,25 +1,32 @@
 import SwiftUI
 
-/// Fully transparent floating lyrics. On the desktop the area is draggable, a faint outline
-/// and a resize grip appear on hover, and there are collapsible playback controls.
-/// On the lock screen it's display-only, with an optional soft album-colour aura.
+/// Fully transparent floating lyrics, used on the desktop and on the lock screen.
+/// Hover reveals the quiet extras (outline, collapse button, controls chevron, resize grip).
+/// Scroll to look back through the lyrics, click a line to jump there, pinch or drag the
+/// corner to resize. Collapsed, it shrinks to a single line with just play/pause.
 struct LyricsView: View {
+    enum Place { case desktop, lockScreen }
+
     @ObservedObject var player: NowPlaying
     @ObservedObject var lyrics: LyricsController
     @ObservedObject var settings = Settings.shared
-    let interactive: Bool
-    let mover: WindowMover?
-    // Plain ObservableObject instead of @State: on newer SDKs @State is a macro whose
-    // plugin only ships with full Xcode, not the Command Line Tools.
     @ObservedObject var hover: HoverState
+    @ObservedObject var browse: BrowseState
+    let place: Place
+    let mover: WindowMover?
 
-    init(player: NowPlaying, lyrics: LyricsController, interactive: Bool, mover: WindowMover?) {
+    init(player: NowPlaying, lyrics: LyricsController, place: Place, mover: WindowMover?) {
         self.player = player
         self.lyrics = lyrics
-        self.interactive = interactive
+        self.place = place
         self.mover = mover
-        self.hover = HoverState()   // created once per window, so it lives as long as the view
+        // Plain ObservableObjects instead of @State: on newer SDKs @State is a macro whose
+        // plugin only ships with full Xcode, not the Command Line Tools.
+        self.hover = HoverState()
+        self.browse = mover?.browse ?? BrowseState()
     }
+
+    private var isDesktop: Bool { place == .desktop }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -33,6 +40,7 @@ struct LyricsView: View {
         .padding(.top, 60)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.easeInOut(duration: 0.5), value: player.track)
+        .animation(.spring(response: 0.45, dampingFraction: 0.86), value: settings.collapsed)
         .environment(\.colorScheme, .dark)
     }
 
@@ -44,6 +52,7 @@ struct LyricsView: View {
         let palette = player.palette
         let m = settings.metrics
         let hovering = hover.card || hover.resizeStart != nil
+        let collapsed = settings.collapsed
         let hasLyrics: Bool = {
             switch lyrics.state {
             case .ready, .loading: return true
@@ -52,69 +61,105 @@ struct LyricsView: View {
         }()
 
         return VStack(spacing: 12 * m.scale) {
-            header(track, time: time, palette: palette, metrics: m)
+            header(track, time: time, palette: palette, metrics: m, collapsed: collapsed)
 
-            if hasLyrics {
+            if hasLyrics && !collapsed {
                 Group {
                     switch lyrics.state {
                     case .ready(let l):
                         LyricStack(lyrics: l, time: time + settings.offset, duration: track.duration,
-                                   palette: palette, metrics: m, font: settings.font)
+                                   palette: palette, metrics: m, font: settings.font,
+                                   glow: settings.glow, romanize: settings.romanize,
+                                   showTranslation: settings.translate,
+                                   browseOffset: browse.offset,
+                                   onTap: { line in
+                                       browse.reset()
+                                       player.seek(to: max(0, line.time - 0.05))
+                                   })
                     default:
                         BreathingDots(time: Date().timeIntervalSinceReferenceDate, color: palette.primary)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
                 .frame(height: m.lyricsHeight)
-                .transition(.opacity)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
 
-            if interactive {
-                controls(palette: palette, hovering: hovering, scale: m.scale)
+            if !collapsed {
+                controls(track: track, palette: palette, hovering: hovering, scale: m.scale)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 14)
-        .frame(width: m.cardWidth)
-        // Transparent. A near-invisible fill keeps the whole area grabbable; on hover a faint
+        .padding(.horizontal, collapsed ? 18 : 24)
+        .padding(.vertical, collapsed ? 10 : 14)
+        .frame(width: collapsed ? nil : m.cardWidth)
+        // Transparent. A near-invisible fill keeps the area clickable; on hover a faint
         // outline shows what you're about to drag.
-        .background(shape.fill(Color.black.opacity(interactive ? (hovering ? 0.12 : 0.004) : 0)))
+        .background(shape.fill(Color.black.opacity(hovering ? 0.12 : 0.004)))
         .overlay(shape.strokeBorder(Color.white.opacity(hovering ? 0.14 : 0), lineWidth: 0.75))
+        .overlay(alignment: .topTrailing) {
+            if !collapsed { collapseButton(collapsed: false, visible: hovering).padding(8) }
+        }
         .overlay(alignment: .bottomTrailing) {
-            if interactive { resizeGrip(visible: hovering) }
+            if isDesktop && !collapsed { resizeGrip(visible: hovering) }
         }
         .background(aura(palette))
         .contentShape(shape)
-        .onHover { hover.card = interactive && $0 }
+        .onHover { hover.card = $0 }
         .gesture(
             DragGesture(minimumDistance: 3, coordinateSpace: .global)
                 .onChanged { _ in mover?.drag() }
                 .onEnded { _ in mover?.end() },
-            including: interactive ? .all : .subviews
+            including: isDesktop ? .all : .subviews
         )
-        .opacity(player.isPlaying ? 1 : 0.7)
+        .simultaneousGesture(
+            MagnifyGesture()
+                .onChanged { value in
+                    if hover.resizeStart == nil { hover.resizeStart = settings.scale }
+                    let start = hover.resizeStart ?? settings.scale
+                    settings.scale = Metrics.clamp(start * value.magnification)
+                }
+                .onEnded { _ in hover.resizeStart = nil },
+            including: isDesktop ? .all : .subviews
+        )
+        .opacity(player.isPlaying ? 1 : 0.75)
         .animation(.easeInOut(duration: 0.5), value: player.isPlaying)
         .animation(.spring(response: 0.45, dampingFraction: 0.86), value: hasLyrics)
         .animation(.easeOut(duration: 0.2), value: hovering)
     }
 
-    /// Drag the bottom-right corner to make the lyrics any size.
+    /// Hover-only button in the top-right corner: collapse to one line, or expand back.
+    private func collapseButton(collapsed: Bool, visible: Bool) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) { settings.collapsed.toggle() }
+        } label: {
+            Image(systemName: collapsed ? "chevron.down" : "chevron.up")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(visible ? 0.7 : 0))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(visible ? 0.1 : 0)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(collapsed ? "Show lyrics" : "Collapse")
+        .allowsHitTesting(visible)
+    }
+
+    /// Drag the bottom-right corner to resize (pinch on the trackpad works too).
     private func resizeGrip(visible: Bool) -> some View {
         Image(systemName: "arrow.up.left.and.arrow.down.right")
             .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white.opacity(visible ? 0.6 : 0))
-            .frame(width: 26, height: 26)
+            .foregroundStyle(.white.opacity(visible ? 0.65 : 0))
+            .frame(width: 34, height: 34)
             .contentShape(Rectangle())
-            .padding(6)
             .help("Drag to resize")
             .highPriorityGesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
                     .onChanged { value in
                         if hover.resizeStart == nil { hover.resizeStart = settings.scale }
                         let start = hover.resizeStart ?? settings.scale
-                        // The card grows around its centre, so its right edge moves half the width change.
-                        let delta = (value.translation.width + value.translation.height * 0.6) / 330
-                        settings.scale = min(max(start + delta, Metrics.minScale), Metrics.maxScale)
+                        // The card grows around its centre, so its corner moves half the width change.
+                        let delta = (value.translation.width - value.translation.height * 0.5) / 330
+                        settings.scale = Metrics.clamp(start + delta)
                     }
                     .onEnded { _ in hover.resizeStart = nil }
             )
@@ -122,7 +167,7 @@ struct LyricsView: View {
 
     @ViewBuilder
     private func aura(_ palette: Palette) -> some View {
-        if !interactive && settings.lockAura {
+        if place == .lockScreen && settings.lockAura && settings.glow {
             ZStack {
                 Circle().fill(palette.primary).frame(width: 300, height: 300).offset(x: -150, y: 10)
                 Circle().fill(palette.secondary).frame(width: 260, height: 260).offset(x: 160, y: 40)
@@ -135,7 +180,8 @@ struct LyricsView: View {
 
     // MARK: Header
 
-    private func header(_ track: NowPlaying.Track, time: Double, palette: Palette, metrics m: Metrics) -> some View {
+    private func header(_ track: NowPlaying.Track, time: Double, palette: Palette,
+                        metrics m: Metrics, collapsed: Bool) -> some View {
         let pt = settings.titleSize.points * max(0.8, m.scale)
         return HStack(spacing: pt * 0.65) {
             if let art = player.artwork {
@@ -156,6 +202,20 @@ struct LyricsView: View {
             EqualizerBars(time: time, playing: player.isPlaying, color: palette.primary)
                 .scaleEffect(pt / 13, anchor: .center)
                 .padding(.leading, 2)
+            if collapsed {
+                ControlButton(id: "mini-play", hover: hover,
+                              symbol: player.isPlaying ? "pause.fill" : "play.fill", size: pt * 0.95,
+                              prominent: true, accent: palette.primary, glow: settings.glow,
+                              help: player.isPlaying ? "Pause" : "Play") {
+                    player.togglePlayPause()
+                }
+                .padding(.leading, 4)
+                .transition(.scale.combined(with: .opacity))
+                // Expand button tucks in only while you hover.
+                collapseButton(collapsed: true, visible: hover.card)
+                    .frame(width: hover.card ? 22 : 0)
+                    .clipped()
+            }
         }
         .lineLimit(1)
         .font(.system(size: pt, weight: .semibold, design: .rounded))
@@ -164,13 +224,13 @@ struct LyricsView: View {
 
     // MARK: Controls
 
-    private func controls(palette: Palette, hovering: Bool, scale: Double) -> some View {
+    private func controls(track: NowPlaying.Track, palette: Palette, hovering: Bool, scale: Double) -> some View {
         let s = max(0.85, min(scale, 1.3))
         return VStack(spacing: 4) {
             if settings.controlsExpanded {
-                HStack(spacing: 20 * s) {
+                HStack(spacing: 18 * s) {
                     ControlButton(id: "loop", hover: hover, symbol: "repeat.1", size: 12 * s,
-                                  active: player.loopEnabled, accent: palette.primary,
+                                  active: player.loopEnabled, accent: palette.primary, glow: settings.glow,
                                   help: "Repeat this song") {
                         player.loopEnabled.toggle()
                     }
@@ -178,19 +238,24 @@ struct LyricsView: View {
                                   help: "Previous") { player.previous() }
                     ControlButton(id: "play", hover: hover,
                                   symbol: player.isPlaying ? "pause.fill" : "play.fill", size: 17 * s,
-                                  prominent: true, accent: palette.primary,
+                                  prominent: true, accent: palette.primary, glow: settings.glow,
                                   help: player.isPlaying ? "Pause" : "Play") {
                         player.togglePlayPause()
                     }
                     ControlButton(id: "next", hover: hover, symbol: "forward.fill", size: 14 * s,
                                   help: "Next") { player.next() }
-                    ControlButton(id: "queue", hover: hover, symbol: "list.bullet", size: 12 * s,
-                                  help: "Open YouTube Music") { player.openPlayer() }
+                    if isDesktop {
+                        ControlButton(id: "share", hover: hover, symbol: "square.and.arrow.up", size: 12 * s,
+                                      help: "Save this lyric as an image") { shareCurrentLine(track) }
+                        ControlButton(id: "queue", hover: hover, symbol: "list.bullet", size: 12 * s,
+                                      help: "Open YouTube Music") { player.openPlayer() }
+                    }
                 }
                 .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
 
+            // Hidden until you hover, so it never spoils the look.
             Button {
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
                     settings.controlsExpanded.toggle()
@@ -199,14 +264,24 @@ struct LyricsView: View {
                 Image(systemName: "chevron.compact.down")
                     .font(.system(size: 18, weight: .medium))
                     .rotationEffect(.degrees(settings.controlsExpanded ? 180 : 0))
-                    .foregroundStyle(.white.opacity(hovering ? 0.7 : 0.22))
+                    .foregroundStyle(.white.opacity(hovering ? 0.7 : 0))
                     .shadow(color: .black.opacity(0.5), radius: 4)
                     .frame(width: 60, height: 16)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .allowsHitTesting(hovering)
             .help(settings.controlsExpanded ? "Hide controls" : "Show controls")
         }
+    }
+
+    private func shareCurrentLine(_ track: NowPlaying.Track) {
+        guard let l = lyrics.currentLyrics else { NSSound.beep(); return }
+        let i = l.index(at: player.position(at: Date()) + settings.offset + LyricStack.lead, duration: track.duration)
+        let line = l.lines[max(i, 0)].display(romanize: settings.romanize)
+        ShareCard.save(line: line, title: LyricsService.cleanTitle(track.title),
+                       artist: LyricsService.primaryArtist(track.artist),
+                       artwork: player.artwork, palette: player.palette, font: settings.font)
     }
 }
 
@@ -226,6 +301,7 @@ struct ControlButton: View {
     var active = false
     var prominent = false
     var accent: Color = .white
+    var glow = true
     var help: String = ""
     let action: () -> Void
     private var hovering: Bool { hover.button == id }
@@ -237,7 +313,7 @@ struct ControlButton: View {
                 .foregroundStyle(active ? accent : .white.opacity(hovering ? 1 : 0.82))
                 .frame(width: size * (prominent ? 2.15 : 2.0), height: size * (prominent ? 2.15 : 2.0))
                 .background(Circle().fill(Color.white.opacity(hovering ? 0.12 : (prominent ? 0.06 : 0))))
-                .shadow(color: accent.opacity(active ? 0.7 : 0), radius: 8)
+                .shadow(color: accent.opacity(active && glow ? 0.7 : 0), radius: 8)
                 .scaleEffect(hovering ? 1.08 : 1)
                 .contentShape(Circle())
         }
@@ -293,9 +369,9 @@ struct BreathingDots: View {
 
 // MARK: - Lyric lines
 
-/// Shows the lines around the current one (2 above, 2 below). Rows keep their identity, so
+/// Shows the lines around the focused one (2 above, 2 below). Rows keep their identity, so
 /// on each new line they glide up together in one spring while the new line brightens and
-/// grows into focus. Drawing 5 lines instead of the whole song keeps it at 60 fps.
+/// grows into focus. Scrolling shifts the focus to look back; it returns to live by itself.
 struct LyricStack: View {
     let lyrics: Lyrics
     let time: Double
@@ -303,22 +379,28 @@ struct LyricStack: View {
     let palette: Palette
     let metrics: Metrics
     let font: LyricFont
+    var glow = true
+    var romanize = false
+    var showTranslation = false
+    var browseOffset = 0
+    var onTap: ((LyricLine) -> Void)? = nil
 
     private static let reach = 2
     /// Switch lines a hair early so it feels in sync rather than late.
-    private static let lead = 0.15
+    static let lead = 0.15
 
     var body: some View {
         let lines = lyrics.lines
-        let raw = currentIndex(lines)
+        let live = lyrics.index(at: time + Self.lead, duration: duration)
         let hasIntro = lyrics.synced && (lines.first?.time ?? 0) > 4
-        let intro = raw < 0 && hasIntro
-        let center = max(raw, 0)
-        let lo = max(0, center - Self.reach)
-        let hi = min(lines.count - 1, center + Self.reach)
+        let browsing = browseOffset != 0
+        let intro = live < 0 && hasIntro && !browsing
+        let focus = min(max(max(live, 0) + browseOffset, 0), lines.count - 1)
+        let lo = max(0, focus - Self.reach)
+        let hi = min(lines.count - 1, focus + Self.reach)
         let rowHeight = metrics.fontSize * 1.3
-        let padTop = Self.reach - (center - lo) - (intro ? 1 : 0)
-        let padBottom = Self.reach - (hi - center)
+        let padTop = Self.reach - (focus - lo) - (intro ? 1 : 0)
+        let padBottom = Self.reach - (hi - focus)
 
         VStack(spacing: metrics.fontSize * 0.38) {
             ForEach(0..<max(padTop, 0), id: \.self) { _ in Color.clear.frame(height: rowHeight) }
@@ -329,13 +411,19 @@ struct LyricStack: View {
             }
             ForEach(Array(lines[lo...hi])) { line in
                 LyricLineView(
-                    text: line.text,
-                    distance: line.id - center + (intro ? 1 : 0),
+                    text: line.display(romanize: romanize),
+                    translation: showTranslation ? line.translation : nil,
+                    distance: line.id - focus + (intro ? 1 : 0),
+                    isLive: line.id == live,
+                    browsing: browsing,
                     time: time,
                     palette: palette,
                     metrics: metrics,
-                    font: font
+                    font: font,
+                    glow: glow
                 )
+                .contentShape(Rectangle())
+                .onTapGesture { onTap?(line) }
                 .id(line.id)
                 .transition(.asymmetric(
                     insertion: .opacity.combined(with: .offset(y: rowHeight * 0.6)),
@@ -345,44 +433,33 @@ struct LyricStack: View {
             ForEach(0..<max(padBottom, 0), id: \.self) { _ in Color.clear.frame(height: rowHeight) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: center)
+        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: focus)
         .animation(.easeInOut(duration: 0.35), value: intro)
         .mask(
             LinearGradient(stops: [
                 .init(color: .clear, location: 0),
-                .init(color: .black, location: 0.22),
-                .init(color: .black, location: 0.78),
+                .init(color: .black, location: 0.2),
+                .init(color: .black, location: 0.8),
                 .init(color: .clear, location: 1),
             ], startPoint: .top, endPoint: .bottom)
         )
         .clipped()
     }
-
-    private func currentIndex(_ lines: [LyricLine]) -> Int {
-        guard !lines.isEmpty else { return 0 }
-        let t = time + Self.lead
-        if !lyrics.synced {
-            guard duration > 0 else { return 0 }
-            return min(lines.count - 1, max(0, Int(t / duration * Double(lines.count))))
-        }
-        var lo = 0, hi = lines.count - 1, found = -1
-        while lo <= hi {
-            let mid = (lo + hi) / 2
-            if lines[mid].time <= t { found = mid; lo = mid + 1 } else { hi = mid - 1 }
-        }
-        return found
-    }
 }
 
-/// One lyric line. The current line is bright with a soft glow in the song's colour;
-/// the others are smaller, faded and slightly blurred. All changes animate with the stack.
+/// One lyric line. The focused line is bright (with a glow in the song's colour when it's
+/// the live line); the others are smaller, faded and slightly blurred.
 struct LyricLineView: View {
     let text: String
+    let translation: String?
     let distance: Int
+    let isLive: Bool
+    let browsing: Bool
     let time: Double
     let palette: Palette
     let metrics: Metrics
     let font: LyricFont
+    let glow: Bool
 
     private var isInstrumental: Bool {
         let t = text.trimmingCharacters(in: .whitespaces)
@@ -390,28 +467,37 @@ struct LyricLineView: View {
     }
 
     var body: some View {
-        let isCurrent = distance == 0
+        let focused = distance == 0
         let d = Double(abs(distance))
+        let glowing = glow && isLive
 
-        Group {
+        VStack(spacing: metrics.fontSize * 0.12) {
             if isInstrumental {
                 BreathingDots(time: time, color: palette.primary)
-                    .opacity(isCurrent ? 1 : 0.3)
+                    .opacity(focused ? 1 : 0.3)
             } else {
                 Text(text)
+                    .font(font.font(size: metrics.fontSize))
+                    .tracking(font.tracking)
                     .foregroundStyle(.white)
-                    .shadow(color: palette.primary.opacity(isCurrent ? 0.55 : 0), radius: 16)
+                    .shadow(color: palette.primary.opacity(glowing ? 0.55 : 0), radius: 16)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+                if let translation, focused {
+                    Text(translation)
+                        .font(.system(size: metrics.fontSize * 0.45, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(2)
+                        .transition(.opacity)
+                }
             }
         }
-        .font(.system(size: metrics.fontSize, weight: font.weight, design: font.design))
-        .tracking(font == .serif ? 0 : -0.3)
-        .lineLimit(2)
-        .minimumScaleFactor(0.8)
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .shadow(color: .black.opacity(0.55), radius: 8, y: 2)
-        .scaleEffect(isCurrent ? 1.0 : 0.8)
-        .opacity(isCurrent ? 1 : max(0.12, 0.5 - d * 0.16))
-        .blur(radius: isCurrent ? 0 : 1.0 + d * 0.9)
+        .scaleEffect(focused ? 1.0 : 0.8)
+        // While browsing, mark the live line with a little extra brightness so you can find it.
+        .opacity(focused ? 1 : (isLive && browsing ? 0.75 : max(0.12, 0.5 - d * 0.16)))
+        .blur(radius: focused ? 0 : 1.0 + d * 0.9)
     }
 }

@@ -5,11 +5,53 @@ struct LyricLine: Identifiable, Equatable {
     let id: Int
     let time: Double
     let text: String
+    /// Latin-letter version for non-Latin scripts (e.g. Tamil → "karuppan varanda").
+    var romanized: String? = nil
+    /// English translation, when available on this Mac.
+    var translation: String? = nil
+
+    /// What to display, honouring the Romanize setting.
+    func display(romanize: Bool) -> String { romanize ? (romanized ?? text) : text }
 }
 
 struct Lyrics: Equatable {
-    let lines: [LyricLine]
+    var lines: [LyricLine]
     let synced: Bool
+
+    /// Index of the line playing at `time` (-1 before the first synced line).
+    func index(at time: Double, duration: Double) -> Int {
+        guard !lines.isEmpty else { return 0 }
+        if !synced {
+            guard duration > 0 else { return 0 }
+            return min(lines.count - 1, max(0, Int(time / duration * Double(lines.count))))
+        }
+        var lo = 0, hi = lines.count - 1, found = -1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if lines[mid].time <= time { found = mid; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        return found
+    }
+
+    /// Adds romanized text to lines written in non-Latin scripts. Uses macOS's built-in
+    /// transliteration (ICU), fully offline.
+    func romanizedCopy() -> Lyrics {
+        var copy = self
+        for i in copy.lines.indices {
+            let t = copy.lines[i].text
+            guard Lyrics.needsRomanizing(t) else { continue }
+            let latin = t.applyingTransform(.toLatin, reverse: false)?
+                .applyingTransform(.stripCombiningMarks, reverse: false)
+            copy.lines[i].romanized = latin
+        }
+        return copy
+    }
+
+    static func needsRomanizing(_ s: String) -> Bool {
+        s.unicodeScalars.contains { $0.properties.isAlphabetic && $0.value > 0x024F }
+    }
+
+    var hasNonLatin: Bool { lines.contains { $0.romanized != nil } }
 }
 
 // MARK: - Controller
@@ -24,10 +66,14 @@ final class LyricsController: ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
+    @Published private(set) var translationNote: String?
     private var cache: [String: Lyrics] = [:]
-    private var currentKey = ""
+    private(set) var currentKey = ""
+    private var currentTrack: NowPlaying.Track?
     private var task: Task<Void, Never>?
+    private var translateTask: Task<Void, Never>?
     private var bag = Set<AnyCancellable>()
+    private static let overridesKey = "lyricsOverrides"
 
     init(player: NowPlaying) {
         player.$track
@@ -44,44 +90,118 @@ final class LyricsController: ObservableObject {
         }
     }
 
+    var currentLyrics: Lyrics? {
+        if case .ready(let l) = state { return l }
+        return nil
+    }
+
+    private static func key(_ t: NowPlaying.Track) -> String { "\(t.title)|\(t.artist)".lowercased() }
+
     private func load(_ track: NowPlaying.Track?) {
         guard let track else {
             currentKey = ""
+            currentTrack = nil
             task?.cancel()
+            translateTask?.cancel()
             state = .idle
             return
         }
-        let key = "\(track.title)|\(track.artist)".lowercased()
+        let key = Self.key(track)
         guard key != currentKey else { return }
         currentKey = key
+        currentTrack = track
         task?.cancel()
+        translateTask?.cancel()
+        translationNote = nil
 
         if let cached = cache[key] {
-            state = .ready(cached)
+            publish(cached, key: key)
             return
         }
         state = .loading
+        let overrideID = (UserDefaults.standard.dictionary(forKey: Self.overridesKey) as? [String: Int])?[key]
         task = Task { [weak self] in
-            let result = await LyricsService.fetch(title: track.title, artist: track.artist,
+            var result: Lyrics?
+            if let id = overrideID { result = await LyricsService.fetch(id: id) }
+            if result == nil {
+                result = await LyricsService.fetch(title: track.title, artist: track.artist,
                                                    album: track.album, duration: track.duration)
+            }
             guard let self, !Task.isCancelled, self.currentKey == key else { return }
             if let result {
-                self.cache[key] = result
-                self.state = .ready(result)
+                self.publish(result, key: key)
             } else {
                 self.state = .notFound
             }
         }
     }
+
+    private func publish(_ raw: Lyrics, key: String) {
+        let lyrics = raw.romanizedCopy()
+        cache[key] = lyrics
+        state = .ready(lyrics)
+        if Settings.shared.translate { translateCurrent() }
+    }
+
+    /// Use a lyrics result the person picked by hand, and remember it for this song.
+    func choose(_ record: LrclibRecord) {
+        guard !currentKey.isEmpty, let parsed = record.parsed else { return }
+        var overrides = (UserDefaults.standard.dictionary(forKey: Self.overridesKey) as? [String: Int]) ?? [:]
+        overrides[currentKey] = record.id
+        UserDefaults.standard.set(overrides, forKey: Self.overridesKey)
+        task?.cancel()
+        translateTask?.cancel()
+        publish(parsed, key: currentKey)
+    }
+
+    /// Fetch English translations for the current lyrics (Apple's on-device translator).
+    func translateCurrent() {
+        guard case .ready(let lyrics) = state, lyrics.lines.allSatisfy({ $0.translation == nil }) else { return }
+        let key = currentKey
+        translateTask?.cancel()
+        translateTask = Task { [weak self] in
+            let outcome = await LyricTranslator.translate(lyrics.lines.map(\.text))
+            guard let self, !Task.isCancelled, self.currentKey == key else { return }
+            switch outcome {
+            case .translated(let texts):
+                var copy = lyrics
+                for i in copy.lines.indices where i < texts.count { copy.lines[i].translation = texts[i] }
+                self.cache[key] = copy
+                self.state = .ready(copy)
+                self.translationNote = nil
+            case .alreadyEnglish:
+                self.translationNote = nil
+            case .needsDownload(let language):
+                self.translationNote = "Translation: download \(language) → English in System Settings › General › Language & Region › Translation Languages"
+            case .unavailable(let reason):
+                self.translationNote = "Translation: \(reason)"
+            }
+        }
+    }
+
+    func clearTranslations() {
+        translateTask?.cancel()
+        translationNote = nil
+        guard case .ready(var lyrics) = state else { return }
+        for i in lyrics.lines.indices { lyrics.lines[i].translation = nil }
+        cache[currentKey] = lyrics
+        state = .ready(lyrics)
+    }
 }
 
 // MARK: - LRCLIB (free, no API key)
 
-private struct LrclibRecord: Decodable {
+struct LrclibRecord: Decodable, Identifiable, Equatable {
+    let id: Int
+    let trackName: String?
+    let artistName: String?
+    let albumName: String?
     let duration: Double?
     let instrumental: Bool?
     let plainLyrics: String?
     let syncedLyrics: String?
+
+    var isSynced: Bool { !(syncedLyrics ?? "").isEmpty }
 
     var parsed: Lyrics? {
         if instrumental == true {
@@ -106,6 +226,18 @@ private struct LrclibRecord: Decodable {
 
 enum LyricsService {
     private static let base = "https://lrclib.net/api"
+
+    /// A specific record by its LRCLIB id (used for lyrics the person picked by hand).
+    static func fetch(id: Int) async -> Lyrics? {
+        let record: LrclibRecord? = await request("get/\(id)", [:])
+        return record?.parsed
+    }
+
+    /// Free-text search for the "Find Lyrics" window.
+    static func search(_ query: String) async -> [LrclibRecord] {
+        let list: [LrclibRecord]? = await request("search", ["q": query])
+        return list ?? []
+    }
 
     static func fetch(title: String, artist: String, album: String, duration: Double) async -> Lyrics? {
         let original = baseTitle(title)          // keeps "(From ...)" in case LRCLIB uses it
@@ -158,7 +290,7 @@ enum LyricsService {
 
     private static func request<T: Decodable>(_ path: String, _ params: [String: String]) async -> T? {
         var comps = URLComponents(string: "\(base)/\(path)")!
-        comps.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
+        if !params.isEmpty { comps.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) } }
         guard let url = comps.url else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.setValue("LyricLock/1.0 (personal macOS lyrics overlay)", forHTTPHeaderField: "User-Agent")

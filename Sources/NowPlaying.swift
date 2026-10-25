@@ -94,6 +94,15 @@ final class NowPlaying: ObservableObject {
         if let url = URL(string: "https://music.youtube.com") { NSWorkspace.shared.open(url) }
     }
 
+    /// Jump to a time in the song (used when you click a lyric line).
+    func seek(to seconds: Double) {
+        let t = max(0, seconds)
+        baseElapsed = t
+        baseDate = Date()
+        lastLoopSeek = Date()
+        send(["seek", String(format: "%.2f", t)], fallback: ["seek", String(Int(t))])
+    }
+
     private func seekToStart() {
         lastLoopSeek = Date()
         baseElapsed = 0
