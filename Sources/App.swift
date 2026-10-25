@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 import ServiceManagement
+import IOKit.pwr_mgt
 
 @main
 enum LyricLockMain {
@@ -16,11 +17,13 @@ enum LyricLockMain {
 
 enum LyricSize: String, CaseIterable {
     case small, medium, large
+    case screen   // used by the screensaver only, not shown in the menu
+    static var menuCases: [LyricSize] { [.small, .medium, .large] }
     var fontSize: CGFloat {
-        switch self { case .small: return 24; case .medium: return 31; case .large: return 40 }
+        switch self { case .small: return 24; case .medium: return 31; case .large: return 40; case .screen: return 56 }
     }
     var cardWidth: CGFloat {
-        switch self { case .small: return 520; case .medium: return 660; case .large: return 820 }
+        switch self { case .small: return 520; case .medium: return 660; case .large: return 820; case .screen: return 1240 }
     }
     var lyricsHeight: CGFloat { fontSize * 5.6 }
     /// Window is bigger than the card: room for the glow and for the queue sidebar (310pt).
@@ -53,9 +56,11 @@ final class Settings: ObservableObject {
     @Published var lockAura: Bool { didSet { defaults.set(lockAura, forKey: "lockAura") } }
     @Published var autoHideWhenPaused: Bool { didSet { defaults.set(autoHideWhenPaused, forKey: "autoHide") } }
     @Published var controlsExpanded: Bool { didSet { defaults.set(controlsExpanded, forKey: "controlsExpanded") } }
+    @Published var screensaver: Bool { didSet { defaults.set(screensaver, forKey: "screensaver") } }
+    @Published var keepAwake: Bool { didSet { defaults.set(keepAwake, forKey: "keepAwake") } }
 
     private init() {
-        defaults.register(defaults: ["lockAura": true, "autoHide": true])
+        defaults.register(defaults: ["lockAura": true, "autoHide": true, "screensaver": true, "keepAwake": true])
         offset = defaults.double(forKey: "offset")
         showOnDesktop = defaults.bool(forKey: "showOnDesktop")
         lowerPosition = defaults.bool(forKey: "lowerPosition")
@@ -64,6 +69,8 @@ final class Settings: ObservableObject {
         lockAura = defaults.bool(forKey: "lockAura")
         autoHideWhenPaused = defaults.bool(forKey: "autoHide")
         controlsExpanded = defaults.bool(forKey: "controlsExpanded")
+        screensaver = defaults.bool(forKey: "screensaver")
+        keepAwake = defaults.bool(forKey: "keepAwake")
     }
 }
 
@@ -76,6 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var lockOverlay: LyricOverlay!
     private var desktopOverlay: LyricOverlay!
+    private var screensaverOverlay: LyricOverlay!
+    private var isScreensaver = false
+    private var displayAssertion: IOPMAssertionID = 0
     private var isLocked = false
     private var hasTrack = false
     private var pausedLong = false
@@ -101,11 +111,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         desktopOverlay.reposition(lower: settings.lowerPosition)
 
+        screensaverOverlay = LyricOverlay(mode: .screensaver, size: .screen) { _ in
+            ScreensaverView(player: self.player, lyrics: self.lyrics)
+        }
+        screensaverOverlay.attachAboveLockScreen()
+
         let dnc = DistributedNotificationCenter.default()
         dnc.addObserver(self, selector: #selector(screenLocked),
                         name: Notification.Name("com.apple.screenIsLocked"), object: nil)
         dnc.addObserver(self, selector: #selector(screenUnlocked),
                         name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
+        dnc.addObserver(self, selector: #selector(screensaverStarted),
+                        name: Notification.Name("com.apple.screensaver.didstart"), object: nil)
+        dnc.addObserver(self, selector: #selector(screensaverStopped),
+                        name: Notification.Name("com.apple.screensaver.didstop"), object: nil)
 
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification,
@@ -143,20 +162,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func screenLocked() { isLocked = true; updateVisibility() }
     @objc private func screenUnlocked() { isLocked = false; updateVisibility() }
+    @objc private func screensaverStarted() { isScreensaver = true; updateVisibility() }
+    @objc private func screensaverStopped() { isScreensaver = false; updateVisibility() }
     @objc private func screensChanged() {
+        screensaverOverlay.reposition(lower: false)
         lockOverlay.reposition(lower: settings.lowerPosition)
         desktopOverlay.reposition(lower: settings.lowerPosition)
     }
 
     private func updateVisibility() {
-        lockOverlay.setVisible(hasTrack && isLocked)
+        let saver = hasTrack && isScreensaver && settings.screensaver
+        screensaverOverlay.setVisible(saver)
+        lockOverlay.setVisible(hasTrack && isLocked && !saver)
         let hiddenForPause = settings.autoHideWhenPaused && pausedLong
-        desktopOverlay.setVisible(hasTrack && settings.showOnDesktop && !isLocked && !hiddenForPause)
+        desktopOverlay.setVisible(hasTrack && settings.showOnDesktop && !isLocked && !isScreensaver && !hiddenForPause)
+        updateDisplayAssertion()
+    }
+
+    /// While music plays on the lock screen or screensaver, keep the display from sleeping,
+    /// so the lyrics stay visible. Released as soon as music pauses or you unlock.
+    private func updateDisplayAssertion(playing: Bool? = nil) {
+        // `playing` is passed from the publisher, which fires just before the property changes.
+        let isPlaying = playing ?? player.isPlaying
+        let want = settings.keepAwake && isPlaying && hasTrack && (isLocked || isScreensaver)
+        if want, displayAssertion == 0 {
+            var id: IOPMAssertionID = 0
+            let ok = IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString,
+                                                 IOPMAssertionLevel(255),
+                                                 "LyricLock is showing lyrics" as CFString, &id)
+            if ok == kIOReturnSuccess { displayAssertion = id }
+        } else if !want, displayAssertion != 0 {
+            IOPMAssertionRelease(displayAssertion)
+            displayAssertion = 0
+        }
     }
 
     /// Desktop lyrics fade out after 30s of pause and return on play.
     private func playbackChanged(_ playing: Bool) {
         pauseTask?.cancel()
+        updateDisplayAssertion(playing: playing)
         if playing {
             if pausedLong { pausedLong = false; updateVisibility() }
         } else {
@@ -190,10 +234,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(menu, "Hide Desktop Lyrics When Paused", #selector(toggleAutoHide), on: settings.autoHideWhenPaused)
         item(menu, "Lower on Lock Screen", #selector(togglePosition), on: settings.lowerPosition)
         item(menu, "Album Glow on Lock Screen", #selector(toggleAura), on: settings.lockAura)
+        item(menu, "Lyrics Screensaver", #selector(toggleScreensaver), on: settings.screensaver)
+        item(menu, "Start Screensaver Now", #selector(startScreensaver))
+        item(menu, "Keep Screen On While Music Plays", #selector(toggleKeepAwake), on: settings.keepAwake)
         menu.addItem(.separator())
 
         let sizeMenu = NSMenu()
-        for size in LyricSize.allCases {
+        for size in LyricSize.menuCases {
             let i = NSMenuItem(title: size.label, action: #selector(pickSize(_:)), keyEquivalent: "")
             i.target = self
             i.representedObject = size.rawValue
@@ -248,6 +295,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func togglePosition() {
         settings.lowerPosition.toggle()
         lockOverlay.reposition(lower: settings.lowerPosition)
+    }
+    @objc private func toggleScreensaver() { settings.screensaver.toggle(); updateVisibility() }
+    @objc private func toggleKeepAwake() { settings.keepAwake.toggle(); updateDisplayAssertion() }
+    @objc private func startScreensaver() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app"))
     }
     @objc private func saveQueueScan() { queue.saveScan() }
     @objc private func toggleAutoHide() { settings.autoHideWhenPaused.toggle(); updateVisibility() }

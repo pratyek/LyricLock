@@ -8,7 +8,7 @@ import SwiftUI
 ///   Drag it anywhere; buttons work; the position is remembered.
 @MainActor
 final class LyricOverlay {
-    enum Mode { case lockScreen, desktop }
+    enum Mode { case lockScreen, desktop, screensaver }
 
     private let window: NSWindow
     private let mode: Mode
@@ -18,7 +18,8 @@ final class LyricOverlay {
 
     init<V: View>(mode: Mode, size: LyricSize, @ViewBuilder content: (WindowMover?) -> V) {
         self.mode = mode
-        let frame = NSRect(origin: .zero, size: size.windowSize)
+        let screenFrame = NSScreen.screens.first?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let frame = mode == .screensaver ? screenFrame : NSRect(origin: .zero, size: size.windowSize)
         window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -27,12 +28,12 @@ final class LyricOverlay {
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
         let host = OverlayHostingView(rootView: content(mode == .desktop ? mover : nil))
-        host.frame = frame
+        host.frame = NSRect(origin: .zero, size: frame.size)
         host.autoresizingMask = [.width, .height]
         window.contentView = host
 
         switch mode {
-        case .lockScreen:
+        case .lockScreen, .screensaver:
             window.ignoresMouseEvents = true
             window.level = .screenSaver
             window.alphaValue = 0
@@ -46,13 +47,17 @@ final class LyricOverlay {
     }
 
     func attachAboveLockScreen() {
-        guard mode == .lockScreen else { return }
+        guard mode != .desktop else { return }
         window.orderFrontRegardless()
         isAboveLockScreen = SkyLight.moveToLockScreenSpace(window)
     }
 
     func reposition(lower: Bool) {
         guard let screen = NSScreen.screens.first else { return }
+        if mode == .screensaver {
+            window.setFrame(screen.frame, display: true)
+            return
+        }
         let size = window.frame.size
         if mode == .desktop, let saved = UserDefaults.standard.string(forKey: Self.originKey) {
             let topLeft = NSPointFromString(saved)
@@ -70,6 +75,7 @@ final class LyricOverlay {
 
     /// Change window size for a new lyric size, keeping the top edge in place.
     func resize(to size: LyricSize, lower: Bool) {
+        guard mode != .screensaver else { return }
         let old = window.frame
         let newSize = size.windowSize
         let origin = NSPoint(x: old.midX - newSize.width / 2, y: old.maxY - newSize.height)
@@ -84,7 +90,7 @@ final class LyricOverlay {
 
     func setVisible(_ visible: Bool) {
         switch mode {
-        case .lockScreen:
+        case .lockScreen, .screensaver:
             // Never order out: that would pull the window out of the lock-screen space.
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.35
