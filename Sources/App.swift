@@ -15,19 +15,34 @@ enum LyricLockMain {
     }
 }
 
-enum LyricSize: String, CaseIterable {
-    case small, medium, large
-    case screen   // used by the screensaver only, not shown in the menu
-    static var menuCases: [LyricSize] { [.small, .medium, .large] }
-    var fontSize: CGFloat {
-        switch self { case .small: return 24; case .medium: return 31; case .large: return 40; case .screen: return 56 }
-    }
-    var cardWidth: CGFloat {
-        switch self { case .small: return 520; case .medium: return 660; case .large: return 820; case .screen: return 1240 }
-    }
+/// Lyric sizing from one continuous scale (drag the corner grip, or pick a preset).
+struct Metrics: Equatable {
+    let scale: Double
+    static let minScale = 0.6
+    static let maxScale = 1.8
+    var fontSize: CGFloat { 31 * scale }
+    var cardWidth: CGFloat { 660 * scale }
     var lyricsHeight: CGFloat { fontSize * 5.6 }
-    /// Window is bigger than the card: room for the glow and for the queue sidebar (310pt).
-    var windowSize: NSSize { NSSize(width: cardWidth + 2 * 330, height: lyricsHeight + 300) }
+    /// Fixed window big enough for the largest scale; the transparent rest lets clicks through.
+    static let windowSize = NSSize(width: 660 * maxScale + 240, height: 31 * maxScale * 5.6 + 320)
+    static let screen = Metrics(scale: 1.8)
+}
+
+enum LyricSize: String, CaseIterable {
+    case small, medium, large, extraLarge
+    var scale: Double {
+        switch self { case .small: return 0.75; case .medium: return 1.0; case .large: return 1.3; case .extraLarge: return 1.6 }
+    }
+    var label: String {
+        switch self { case .small: return "Small"; case .medium: return "Medium"; case .large: return "Large"; case .extraLarge: return "Extra Large" }
+    }
+}
+
+enum TitleSize: String, CaseIterable {
+    case small, medium, large
+    var points: CGFloat {
+        switch self { case .small: return 12; case .medium: return 15; case .large: return 19 }
+    }
     var label: String { rawValue.capitalized }
 }
 
@@ -51,7 +66,9 @@ final class Settings: ObservableObject {
     @Published var offset: Double { didSet { defaults.set(offset, forKey: "offset") } }
     @Published var showOnDesktop: Bool { didSet { defaults.set(showOnDesktop, forKey: "showOnDesktop") } }
     @Published var lowerPosition: Bool { didSet { defaults.set(lowerPosition, forKey: "lowerPosition") } }
-    @Published var size: LyricSize { didSet { defaults.set(size.rawValue, forKey: "size") } }
+    @Published var scale: Double { didSet { defaults.set(scale, forKey: "scale") } }
+    @Published var titleSize: TitleSize { didSet { defaults.set(titleSize.rawValue, forKey: "titleSize") } }
+    var metrics: Metrics { Metrics(scale: scale) }
     @Published var font: LyricFont { didSet { defaults.set(font.rawValue, forKey: "font") } }
     @Published var lockAura: Bool { didSet { defaults.set(lockAura, forKey: "lockAura") } }
     @Published var autoHideWhenPaused: Bool { didSet { defaults.set(autoHideWhenPaused, forKey: "autoHide") } }
@@ -60,11 +77,13 @@ final class Settings: ObservableObject {
     @Published var keepAwake: Bool { didSet { defaults.set(keepAwake, forKey: "keepAwake") } }
 
     private init() {
-        defaults.register(defaults: ["lockAura": true, "autoHide": true, "screensaver": true, "keepAwake": true])
+        defaults.register(defaults: ["lockAura": true, "autoHide": true, "screensaver": true, "keepAwake": true,
+                                     "scale": 1.0, "controlsExpanded": true])
         offset = defaults.double(forKey: "offset")
         showOnDesktop = defaults.bool(forKey: "showOnDesktop")
         lowerPosition = defaults.bool(forKey: "lowerPosition")
-        size = LyricSize(rawValue: defaults.string(forKey: "size") ?? "") ?? .medium
+        scale = min(max(defaults.double(forKey: "scale"), Metrics.minScale), Metrics.maxScale)
+        titleSize = TitleSize(rawValue: defaults.string(forKey: "titleSize") ?? "") ?? .medium
         font = LyricFont(rawValue: defaults.string(forKey: "font") ?? "") ?? .standard
         lockAura = defaults.bool(forKey: "lockAura")
         autoHideWhenPaused = defaults.bool(forKey: "autoHide")
@@ -78,7 +97,6 @@ final class Settings: ObservableObject {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let player = NowPlaying()
     private lazy var lyrics = LyricsController(player: player)
-    private lazy var queue = QueueReader(player: player)
     private let settings = Settings.shared
     private var statusItem: NSStatusItem!
     private var lockOverlay: LyricOverlay!
@@ -100,18 +118,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
-        lockOverlay = LyricOverlay(mode: .lockScreen, size: settings.size) { _ in
-            LyricsView(player: self.player, lyrics: self.lyrics, queue: self.queue, interactive: false, mover: nil)
+        lockOverlay = LyricOverlay(mode: .lockScreen) { _ in
+            LyricsView(player: self.player, lyrics: self.lyrics, interactive: false, mover: nil)
         }
         lockOverlay.reposition(lower: settings.lowerPosition)
         lockOverlay.attachAboveLockScreen()
 
-        desktopOverlay = LyricOverlay(mode: .desktop, size: settings.size) { mover in
-            LyricsView(player: self.player, lyrics: self.lyrics, queue: self.queue, interactive: true, mover: mover)
+        desktopOverlay = LyricOverlay(mode: .desktop) { mover in
+            LyricsView(player: self.player, lyrics: self.lyrics, interactive: true, mover: mover)
         }
         desktopOverlay.reposition(lower: settings.lowerPosition)
 
-        screensaverOverlay = LyricOverlay(mode: .screensaver, size: .screen) { _ in
+        screensaverOverlay = LyricOverlay(mode: .screensaver) { _ in
             ScreensaverView(player: self.player, lyrics: self.lyrics)
         }
         screensaverOverlay.attachAboveLockScreen()
@@ -142,16 +160,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         player.$isPlaying
             .removeDuplicates()
             .sink { [weak self] playing in self?.playbackChanged(playing) }
-            .store(in: &bag)
-
-        settings.$size
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] size in
-                guard let self else { return }
-                self.lockOverlay.resize(to: size, lower: self.settings.lowerPosition)
-                self.desktopOverlay.resize(to: size, lower: self.settings.lowerPosition)
-            }
             .store(in: &bag)
 
         _ = lyrics // start observing
@@ -240,16 +248,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         let sizeMenu = NSMenu()
-        for size in LyricSize.menuCases {
+        for size in LyricSize.allCases {
             let i = NSMenuItem(title: size.label, action: #selector(pickSize(_:)), keyEquivalent: "")
             i.target = self
             i.representedObject = size.rawValue
-            i.state = settings.size == size ? .on : .off
+            i.state = abs(settings.scale - size.scale) < 0.03 ? .on : .off
             sizeMenu.addItem(i)
         }
-        let sizeItem = NSMenuItem(title: "Size", action: nil, keyEquivalent: "")
+        sizeMenu.addItem(.separator())
+        let tip = NSMenuItem(title: "Tip: drag the corner grip on the lyrics to any size", action: nil, keyEquivalent: "")
+        tip.isEnabled = false
+        sizeMenu.addItem(tip)
+        let sizeItem = NSMenuItem(title: "Lyrics Size", action: nil, keyEquivalent: "")
         sizeItem.submenu = sizeMenu
         menu.addItem(sizeItem)
+
+        let titleMenu = NSMenu()
+        for t in TitleSize.allCases {
+            let i = NSMenuItem(title: t.label, action: #selector(pickTitleSize(_:)), keyEquivalent: "")
+            i.target = self
+            i.representedObject = t.rawValue
+            i.state = settings.titleSize == t ? .on : .off
+            titleMenu.addItem(i)
+        }
+        let titleItem = NSMenuItem(title: "Song & Artist Size", action: nil, keyEquivalent: "")
+        titleItem.submenu = titleMenu
+        menu.addItem(titleItem)
 
         let fontMenu = NSMenu()
         for font in LyricFont.allCases {
@@ -268,9 +292,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(menu, "Show Lyrics Earlier (+0.25s)", #selector(earlier))
         item(menu, "Show Lyrics Later (−0.25s)", #selector(later))
         item(menu, "Reset Timing", #selector(resetTiming))
-        menu.addItem(.separator())
-
-        item(menu, "Save Queue Scan to Desktop", #selector(saveQueueScan))
         menu.addItem(.separator())
 
         item(menu, "Launch at Login", #selector(toggleLogin),
@@ -301,11 +322,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func startScreensaver() {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app"))
     }
-    @objc private func saveQueueScan() { queue.saveScan() }
     @objc private func toggleAutoHide() { settings.autoHideWhenPaused.toggle(); updateVisibility() }
     @objc private func toggleAura() { settings.lockAura.toggle() }
     @objc private func pickSize(_ sender: NSMenuItem) {
-        if let raw = sender.representedObject as? String, let size = LyricSize(rawValue: raw) { settings.size = size }
+        if let raw = sender.representedObject as? String, let size = LyricSize(rawValue: raw) {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { settings.scale = size.scale }
+        }
+    }
+    @objc private func pickTitleSize(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let t = TitleSize(rawValue: raw) { settings.titleSize = t }
     }
     @objc private func pickFont(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let font = LyricFont(rawValue: raw) { settings.font = font }

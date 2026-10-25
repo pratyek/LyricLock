@@ -41,16 +41,17 @@ open /Applications/LyricLock.app
 
 1. Play a song in YouTube Music.
 2. Lock your Mac: **Ctrl + Cmd + Q** (or Apple menu → Lock Screen).
-3. The lyrics float on the lock screen, transparent, with words lighting up in the album's colours. They hide again when you unlock.
+3. The lyrics float on the lock screen, transparent, with the current line glowing in the album's colours. They hide again when you unlock.
 
 ### Desktop widget
 
 Turn on **Show on Desktop** in the ♫ menu bar menu. The lyrics sit on your desktop, behind app windows. A faint outline appears when you hover.
 
 - **Drag** it anywhere; the spot is remembered.
+- **Resize**: hover and drag the corner grip (bottom right) to make the lyrics any size, or pick a preset in ♫ → Lyrics Size.
 - Click the **little chevron** under the lyrics to show or hide controls: repeat, previous, play/pause, next, and a queue button.
 - **Repeat** loops the current song (LyricLock handles this itself).
-- **Queue** slides out an "Up next" sidebar. Click any song in it to play it.
+- **Queue** brings the YouTube Music window to the front, where its queue is.
 
 ### Screensaver
 
@@ -64,17 +65,6 @@ To set it up (one time):
 
 **Keep Screen On While Music Plays** (on by default) stops the display from going dark while music plays on the lock screen or screensaver. It lets the screen sleep normally once you pause.
 
-### Queue sidebar setup
-
-YouTube Music doesn't share its queue with macOS, so LyricLock reads it from the YouTube Music window, the way screen readers do. That needs **Accessibility** permission:
-
-1. Click the queue button, then **Allow Access**.
-2. In System Settings → Privacy & Security → Accessibility, turn on **LyricLock**.
-
-After each rebuild, macOS may treat LyricLock as a new app. If the sidebar asks for access again, or shows nothing, remove LyricLock from that list with the **−** button and allow it again.
-
-If the sidebar says it can't find the queue, open the player in YouTube Music (click the song at the bottom of its window) and press refresh. If it still can't, click **Save Scan for Claude** (or ♫ → Save Queue Scan to Desktop) and send the `LyricLock-queue-scan.txt` file from your Desktop to Claude.
-
 ### Menu options
 
 - **Show on Desktop** / **Reset Desktop Position**
@@ -82,7 +72,9 @@ If the sidebar says it can't find the queue, open the player in YouTube Music (c
 - **Lower on Lock Screen**: move it if it overlaps the clock or your user picture.
 - **Album Glow on Lock Screen**: a soft colour aura from the album art behind the lyrics.
 - **Lyrics Screensaver** / **Start Screensaver Now** / **Keep Screen On While Music Plays**
-- **Size**: Small, Medium, Large. **Font**: Default, Rounded, Serif.
+- **Lyrics Size**: Small, Medium, Large, Extra Large (or drag the corner grip).
+- **Song & Artist Size**: Small, Medium, Large.
+- **Font**: Default, Rounded, Serif.
 - **Show Lyrics Earlier / Later**: nudge timing in 0.25s steps.
 - **Launch at Login**
 
@@ -100,9 +92,8 @@ rm -rf /Applications/LyricLock.app && mv build/LyricLock.app /Applications/ && o
 |---|---|
 | `NowPlaying.swift` | Polls `media-control get` once a second for title, artist and playback position, and extrapolates smoothly between polls. Works with any player that shows in the system media controls, not just YouTube Music. |
 | `Lyrics.swift` | Fetches time-synced lyrics from [LRCLIB](https://lrclib.net) (free, no account) and parses the LRC format. Strips "(Official Video)", "(From \"Film\")" and extra artists so more songs match. |
-| `LyricsView.swift` | Transparent lyrics: words light up one by one in the song's colour, only the 5 nearby lines are drawn so it stays at 60 fps, breathing dots during instrumentals, collapsible controls and the queue sidebar. |
+| `LyricsView.swift` | Transparent lyrics: line-by-line animation with the current line glowing in the song's colour, only the 5 nearby lines are drawn so it stays at 60 fps, breathing dots during instrumentals, resize grip and collapsible controls. |
 | `Palette.swift` | Pulls the main colours out of the album art. |
-| `Queue.swift` | Reads YouTube Music's "Up next" list through the Accessibility API and plays a song when you click it. |
 | `ScreensaverView.swift` | The full-screen scene shown over the screen saver. |
 | `Assets/` | App icon (`make_icon.py` regenerates it). |
 | `Overlay.swift` | Lock-screen window moved into a SkyLight window-server space above the lock screen (the technique WidgetScreen and Atoll use), plus the draggable desktop window. |

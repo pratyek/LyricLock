@@ -89,10 +89,10 @@ struct ScreensaverView: View {
                            time: player.position(at: ctx.date) + settings.offset,
                            duration: track.duration,
                            palette: player.palette,
-                           size: .screen,
+                           metrics: .screen,
                            font: settings.font)
             }
-            .frame(width: width, height: LyricSize.screen.lyricsHeight)
+            .frame(width: width, height: Metrics.screen.lyricsHeight)
         default:
             // No lyrics: a big, calm album cover instead.
             if let art = player.artwork {

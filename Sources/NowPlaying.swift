@@ -76,14 +76,22 @@ final class NowPlaying: ObservableObject {
         send(["previous-track"], fallback: ["send", "5"])
     }
 
-    /// Brings the player (e.g. the YouTube Music web app) to the front, where its queue lives.
+    /// Brings the player (e.g. the YouTube Music web app) to the front.
     func openPlayer() {
         if let id = playerBundleID,
            let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-        } else if let url = URL(string: "https://music.youtube.com") {
-            NSWorkspace.shared.open(url)
+            return
         }
+        // Fall back to the YouTube Music web app by name, then to the website.
+        if let app = NSWorkspace.shared.runningApplications.first(where: { app in
+            let name = (app.localizedName ?? "").lowercased()
+            return name.contains("youtube music") || name == "yt music"
+        }) {
+            app.activate()
+            return
+        }
+        if let url = URL(string: "https://music.youtube.com") { NSWorkspace.shared.open(url) }
     }
 
     private func seekToStart() {

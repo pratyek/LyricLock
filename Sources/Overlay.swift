@@ -16,10 +16,10 @@ final class LyricOverlay {
     private(set) var isAboveLockScreen = false
     private static let originKey = "desktopTopLeft"
 
-    init<V: View>(mode: Mode, size: LyricSize, @ViewBuilder content: (WindowMover?) -> V) {
+    init<V: View>(mode: Mode, @ViewBuilder content: (WindowMover?) -> V) {
         self.mode = mode
         let screenFrame = NSScreen.screens.first?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let frame = mode == .screensaver ? screenFrame : NSRect(origin: .zero, size: size.windowSize)
+        let frame = mode == .screensaver ? screenFrame : NSRect(origin: .zero, size: Metrics.windowSize)
         window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -73,15 +73,8 @@ final class LyricOverlay {
         window.setFrameOrigin(NSPoint(x: f.midX - size.width / 2, y: y))
     }
 
-    /// Change window size for a new lyric size, keeping the top edge in place.
-    func resize(to size: LyricSize, lower: Bool) {
-        guard mode != .screensaver else { return }
-        let old = window.frame
-        let newSize = size.windowSize
-        let origin = NSPoint(x: old.midX - newSize.width / 2, y: old.maxY - newSize.height)
-        window.setFrame(NSRect(origin: origin, size: newSize), display: true)
-        if mode == .desktop { saveOrigin() } else { reposition(lower: lower) }
-    }
+    // The window is always sized for the largest lyric scale; the transparent area around
+    // the lyrics lets clicks through, so resizing the lyrics never needs to resize the window.
 
     func resetDesktopPosition(lower: Bool) {
         UserDefaults.standard.removeObject(forKey: Self.originKey)
