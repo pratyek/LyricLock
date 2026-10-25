@@ -71,6 +71,7 @@ A full-screen scene: blurred album art, a large clock, big animated lyrics and t
 
 - **Start it:** press **⌃⌥⌘S** (Control + Option + Command + S) from any app, or ♫ → Start Lyrics Screensaver.
 - **End it:** press **Space**. Moving the mouse or pressing other keys does nothing, so it won't disappear by accident. (⌃⌥⌘S again also ends it.)
+- **While it's showing:** scroll to look back through the lyrics, and click a line to jump the song there. The cursor appears when you move the mouse and hides again after a moment.
 - **Start it automatically:** ♫ → Start Screensaver Automatically → after 2, 5, 10 or 15 minutes idle, while music is playing.
 
 **Keep Screen On While Music Plays** (on by default) stops the display from going dark while music plays on the lock screen or the screensaver. It lets the screen sleep normally once you pause.

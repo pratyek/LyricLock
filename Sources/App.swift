@@ -177,8 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         desktopOverlay.reposition(lower: settings.lowerPosition)
 
-        screensaverOverlay = LyricOverlay(mode: .screensaver) { _ in
-            ScreensaverView(player: self.player, lyrics: self.lyrics)
+        screensaverOverlay = LyricOverlay(mode: .screensaver) {
+            ScreensaverView(player: self.player, lyrics: self.lyrics, mover: $0)
         }
         screensaverOverlay.onSpace = { [weak self] in self?.endScreensaver() }
 

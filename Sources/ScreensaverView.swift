@@ -6,10 +6,12 @@ struct ScreensaverView: View {
     @ObservedObject var player: NowPlaying
     @ObservedObject var lyrics: LyricsController
     @ObservedObject var settings = Settings.shared
+    @ObservedObject var browse: BrowseState
 
-    init(player: NowPlaying, lyrics: LyricsController) {
+    init(player: NowPlaying, lyrics: LyricsController, mover: WindowMover?) {
         self.player = player
         self.lyrics = lyrics
+        self.browse = mover?.browse ?? BrowseState()
     }
 
     var body: some View {
@@ -100,7 +102,12 @@ struct ScreensaverView: View {
                            font: settings.font,
                            glow: settings.glow,
                            romanize: settings.romanize,
-                           showTranslation: settings.translate)
+                           showTranslation: settings.translate,
+                           browseOffset: browse.offset,
+                           onTap: { line in
+                               browse.reset()
+                               player.seek(to: max(0, line.time - 0.05))
+                           })
             }
             .frame(width: width, height: Metrics.screen.lyricsHeight)
         default:

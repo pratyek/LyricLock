@@ -20,7 +20,7 @@ final class LyricOverlay {
     private(set) var isAboveLockScreen = false
     private var shown = false
     private var mouseTimer: Timer?
-    private var cursorHidden = false
+    private var cursorTimer: Timer?
     /// Screensaver only: called when Space is pressed while it has focus.
     var onSpace: (() -> Void)? {
         didSet { (window as? KeyableWindow)?.onSpace = onSpace }
@@ -40,7 +40,7 @@ final class LyricOverlay {
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
-        let host = OverlayHostingView(rootView: content(mode == .screensaver ? nil : mover))
+        let host = OverlayHostingView(rootView: content(mover))
         let browse = mover.browse
         host.onScroll = { event in browse.scroll(event) }
         host.frame = NSRect(origin: .zero, size: frame.size)
@@ -144,9 +144,20 @@ final class LyricOverlay {
                     ctx.duration = 0.6
                     window.animator().alphaValue = 1
                 }
-                if !cursorHidden { NSCursor.hide(); cursorHidden = true }
+                // Cursor hides while you watch, and comes back as soon as you move the mouse
+                // (so you can scroll and click lines), then hides again after a moment.
+                NSCursor.setHiddenUntilMouseMoves(true)
+                cursorTimer?.invalidate()
+                cursorTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+                    Task { @MainActor in
+                        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved)
+                        if idle > 2.5 { NSCursor.setHiddenUntilMouseMoves(true) }
+                    }
+                }
             } else {
-                if cursorHidden { NSCursor.unhide(); cursorHidden = false }
+                cursorTimer?.invalidate()
+                cursorTimer = nil
+                NSCursor.setHiddenUntilMouseMoves(false)
                 guard window.isVisible else { return }
                 NSAnimationContext.runAnimationGroup({ ctx in
                     ctx.duration = 0.35
