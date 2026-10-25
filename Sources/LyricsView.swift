@@ -39,7 +39,7 @@ struct LyricsView: View {
 
     // MARK: Card
 
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 30, style: .continuous) }
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 26, style: .continuous) }
 
     private func card(_ track: NowPlaying.Track, time: Double) -> some View {
         let palette = player.palette
@@ -77,7 +77,7 @@ struct LyricsView: View {
         .padding(.bottom, interactive ? 10 : 20)
         .frame(width: settings.size.cardWidth)
         .background(glass(palette))
-        .overlay(shape.strokeBorder(Color.white.opacity(hovering ? 0.26 : 0.09), lineWidth: 1))
+        .overlay(shape.strokeBorder(Color.white.opacity(hovering ? 0.16 : 0.05), lineWidth: 0.75))
         .background(aura(palette))
         .contentShape(shape)
         .onHover { hover.card = interactive && $0 }
@@ -93,20 +93,12 @@ struct LyricsView: View {
         .animation(.easeOut(duration: 0.2), value: hovering)
     }
 
+    /// Barely-there frosted glass: a light blur with a whisper of the song's colour.
     private func glass(_ palette: Palette) -> some View {
         ZStack {
-            shape.fill(.ultraThinMaterial).opacity(0.78)
-            shape.fill(
-                LinearGradient(colors: [palette.tint.opacity(0.55), Color.black.opacity(0.28)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-            )
-            // faint top highlight, like light hitting glass
-            shape.fill(
-                LinearGradient(colors: [Color.white.opacity(0.07), .clear],
-                               startPoint: .top, endPoint: .center)
-            )
+            shape.fill(.ultraThinMaterial).opacity(0.32)
+            shape.fill(palette.tint.opacity(0.10))
         }
-        .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
     }
 
     @ViewBuilder
@@ -145,7 +137,7 @@ struct LyricsView: View {
             EqualizerBars(time: time, playing: player.isPlaying, color: palette.primary)
         }
         .lineLimit(1)
-        .font(.system(size: 13, weight: .semibold, design: .rounded))
+        .font(.system(size: 12, weight: .semibold, design: .rounded))
         .shadow(color: .black.opacity(0.4), radius: 4, y: 1)
     }
 
@@ -154,20 +146,20 @@ struct LyricsView: View {
     private func controls(palette: Palette) -> some View {
         VStack(spacing: 6) {
             if settings.controlsExpanded {
-                HStack(spacing: 26) {
-                    ControlButton(id: "loop", hover: hover, symbol: "repeat.1", size: 15,
+                HStack(spacing: 20) {
+                    ControlButton(id: "loop", hover: hover, symbol: "repeat.1", size: 12,
                                   active: player.loopEnabled, accent: palette.primary,
                                   help: "Repeat this song") {
                         player.loopEnabled.toggle()
                     }
-                    ControlButton(id: "prev", hover: hover, symbol: "backward.fill", size: 18, help: "Previous") { player.previous() }
-                    ControlButton(id: "play", hover: hover, symbol: player.isPlaying ? "pause.fill" : "play.fill", size: 22,
+                    ControlButton(id: "prev", hover: hover, symbol: "backward.fill", size: 14, help: "Previous") { player.previous() }
+                    ControlButton(id: "play", hover: hover, symbol: player.isPlaying ? "pause.fill" : "play.fill", size: 16,
                                   prominent: true, accent: palette.primary,
                                   help: player.isPlaying ? "Pause" : "Play") {
                         player.togglePlayPause()
                     }
-                    ControlButton(id: "next", hover: hover, symbol: "forward.fill", size: 18, help: "Next") { player.next() }
-                    ControlButton(id: "queue", hover: hover, symbol: "list.bullet", size: 15,
+                    ControlButton(id: "next", hover: hover, symbol: "forward.fill", size: 14, help: "Next") { player.next() }
+                    ControlButton(id: "queue", hover: hover, symbol: "list.bullet", size: 12,
                                   help: "Open YouTube Music to see the queue") { player.openPlayer() }
                 }
                 .padding(.top, 4)
@@ -216,12 +208,12 @@ struct ControlButton: View {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundStyle(active ? accent : .white.opacity(hovering ? 1 : 0.8))
-                .frame(width: prominent ? 46 : 32, height: prominent ? 46 : 32)
+                .frame(width: prominent ? 38 : 28, height: prominent ? 38 : 28)
                 .background(
-                    Circle().fill(Color.white.opacity(prominent ? (hovering ? 0.22 : 0.14) : (hovering ? 0.1 : 0)))
+                    Circle().fill(Color.white.opacity(prominent ? (hovering ? 0.14 : 0.07) : (hovering ? 0.08 : 0)))
                 )
                 .overlay(
-                    Circle().strokeBorder(accent.opacity(prominent ? 0.35 : 0), lineWidth: 1)
+                    Circle().strokeBorder(Color.white.opacity(prominent ? 0.08 : 0), lineWidth: 0.75)
                 )
                 .shadow(color: accent.opacity(active ? 0.6 : 0), radius: 8)
                 .scaleEffect(hovering ? 1.08 : 1)

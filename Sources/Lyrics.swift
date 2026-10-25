@@ -202,11 +202,11 @@ enum LyricsService {
     }
 
     /// First credited artist: "Anirudh Ravichander, M.S Krsna & Super Subu" -> "Anirudh Ravichander".
+    /// Keeps duo names like "She & Him" or "Simon & Garfunkel" intact when there's no comma.
     static func primaryArtist(_ s: String) -> String {
         let cleaned = cleanArtist(s)
-        let parts = cleaned.components(separatedBy: CharacterSet(charactersIn: ",&"))
-        var first = parts.first ?? cleaned
-        for sep in [" x ", " X ", " feat", " ft.", " and "] {
+        var first = cleaned.components(separatedBy: ",").first ?? cleaned
+        for sep in [" x ", " X ", " feat", " ft.", " Feat", " Ft."] {
             if let r = first.range(of: sep) { first = String(first[..<r.lowerBound]) }
         }
         first = first.trimmingCharacters(in: .whitespaces)

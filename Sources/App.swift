@@ -17,12 +17,12 @@ enum LyricLockMain {
 enum LyricSize: String, CaseIterable {
     case small, medium, large
     var fontSize: CGFloat {
-        switch self { case .small: return 28; case .medium: return 36; case .large: return 46 }
+        switch self { case .small: return 24; case .medium: return 31; case .large: return 40 }
     }
     var cardWidth: CGFloat {
-        switch self { case .small: return 620; case .medium: return 780; case .large: return 960 }
+        switch self { case .small: return 520; case .medium: return 660; case .large: return 820 }
     }
-    var lyricsHeight: CGFloat { fontSize * 7.4 }
+    var lyricsHeight: CGFloat { fontSize * 5.6 }
     /// Window is bigger than the card so the glow and hover outline have room.
     var windowSize: NSSize { NSSize(width: cardWidth + 220, height: lyricsHeight + 330) }
     var label: String { rawValue.capitalized }
