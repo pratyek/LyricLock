@@ -95,9 +95,9 @@ final class QueueReader: ObservableObject {
         scanning = true
         if items.isEmpty { status = .loading }
         let current = player?.track.map { LyricsService.cleanTitle($0.title).lowercased() } ?? ""
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let rows = QueueScanner.scan(pid: pid)
-            Task { @MainActor [weak self] in self?.apply(rows, currentTitle: current) }
+            Task { @MainActor in self?.apply(rows, currentTitle: current) }
         }
     }
 
@@ -124,9 +124,9 @@ final class QueueReader: ObservableObject {
     func play(_ item: QueueItem) {
         guard item.id < elements.count else { return }
         let box = AXBox([elements[item.id]])
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             _ = QueueScanner.press(box.elements[0])
-            Task { @MainActor [weak self] in
+            Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 self?.refresh()
             }
