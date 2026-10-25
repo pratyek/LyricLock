@@ -147,6 +147,8 @@ final class LyricOverlay {
         switch mode {
         case .screensaver:
             if visible {
+                // Full-screen and in front: it takes all clicks and scrolls while it's showing.
+                window.ignoresMouseEvents = false
                 if let screen = NSScreen.main ?? NSScreen.screens.first { window.setFrame(screen.frame, display: true) }
                 window.alphaValue = 0
                 NSApp.activate()
